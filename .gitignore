@@ -3,3 +3,7 @@ liquid-glass@thinkingcoding1231.gmail.com/node_modules
 liquid-glass@thinkingcoding1231.gmail.com/files.py
 liquid-glass@thinkingcoding1231.gmail.com/tests
 liquid-glass@thinkingcoding1231.gmail.com/output.txt
+*/.freebuff
+*/__pycache__
+*/node_modules
+*/*.py
