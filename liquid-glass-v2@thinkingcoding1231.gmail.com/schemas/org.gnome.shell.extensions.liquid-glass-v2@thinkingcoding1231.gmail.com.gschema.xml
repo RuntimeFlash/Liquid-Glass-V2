@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.liquid-glass-v2@thinkingcoding1231.gmail.com" path="/org/gnome/shell/extensions/liquid-glass-v2/">
+    <key name="enable-dock-glass" type="b"><default>true</default><summary>Enable dock glass</summary></key>
+    <key name="dock-glass-expand" type="i"><default>0</default><summary>Dock expansion</summary></key>
+    <key name="dock-margin-bottom" type="i"><default>8</default><summary>Dock bottom margin</summary></key>
+    <key name="dock-tint-color" type="s"><default>"#0a4f9c"</default><summary>Dock tint</summary></key>
+    <key name="dock-tint-strength" type="d"><default>0.16</default><summary>Dock tint strength</summary></key>
+    <key name="dock-blur-radius" type="i"><default>18</default><summary>Dock blur radius</summary></key>
+    <key name="dock-corner-radius" type="d"><default>30.0</default><summary>Dock corner radius</summary></key>
+    <key name="enable-menu-glass" type="b"><default>true</default><summary>Enable menu glass</summary></key>
+    <key name="enable-menu-animation" type="b"><default>true</default><summary>Enable menu animation</summary></key>
+    <key name="menu-spring-stiffness" type="d"><default>120.0</default><summary>Menu spring stiffness</summary></key>
+    <key name="menu-spring-damping" type="d"><default>8.0</default><summary>Menu spring damping</summary></key>
+    <key name="menu-spring-mass" type="d"><default>1.0</default><summary>Menu spring mass</summary></key>
+    <key name="menu-animation-interval-ms" type="i"><default>16</default><summary>Menu animation interval</summary></key>
+    <key name="menu-open-scale" type="d"><default>1.08</default><summary>Menu open stamp scale (start size, settles to 1.0)</summary></key>
+    <key name="menu-glass-expand" type="i"><default>12</default><summary>Menu expansion</summary></key>
+    <key name="menu-x-offset" type="i"><default>0</default><summary>Menu x offset</summary></key>
+    <key name="menu-y-offset" type="i"><default>17</default><summary>Menu y offset</summary></key>
+    <key name="menu-enable-adaptive-text-color" type="b"><default>true</default><summary>Adaptive menu text</summary></key>
+    <key name="menu-sample-interval-ms" type="i"><default>400</default><summary>Menu sample interval</summary></key>
+    <key name="menu-tint-color" type="s"><default>"#0a4f9c"</default><summary>Menu tint</summary></key>
+    <key name="menu-tint-strength" type="d"><default>0.18</default><summary>Menu tint strength</summary></key>
+    <key name="menu-blur-radius" type="i"><default>20</default><summary>Menu blur radius</summary></key>
+    <key name="menu-corner-radius" type="d"><default>24.0</default><summary>Menu corner radius</summary></key>
+    <key name="enable-notification-glass" type="b"><default>true</default><summary>Enable notification glass</summary></key>
+    <key name="notification-enable-adaptive-text-color" type="b"><default>true</default><summary>Adaptive notification text</summary></key>
+    <key name="notification-sample-interval-ms" type="i"><default>400</default><summary>Notification sample interval</summary></key>
+    <key name="notification-glass-expand" type="i"><default>12</default><summary>Notification expansion</summary></key>
+    <key name="notification-y-offset" type="i"><default>10</default><summary>Notification y offset</summary></key>
+    <key name="notification-tint-color" type="s"><default>"#0a4f9c"</default><summary>Notification tint</summary></key>
+    <key name="notification-tint-strength" type="d"><default>0.16</default><summary>Notification tint strength</summary></key>
+    <key name="notification-blur-radius" type="i"><default>20</default><summary>Notification blur radius</summary></key>
+    <key name="notification-corner-radius" type="d"><default>24.0</default><summary>Notification corner radius</summary></key>
+    <key name="enable-quick-settings-glass" type="b"><default>true</default><summary>Enable quick settings glass</summary></key>
+    <key name="enable-quick-settings-animation" type="b"><default>true</default><summary>Enable quick settings animation</summary></key>
+    <key name="quick-settings-spring-stiffness" type="d"><default>120.0</default><summary>Quick settings spring stiffness</summary></key>
+    <key name="quick-settings-spring-damping" type="d"><default>8.0</default><summary>Quick settings spring damping</summary></key>
+    <key name="quick-settings-spring-mass" type="d"><default>1.0</default><summary>Quick settings spring mass</summary></key>
+    <key name="quick-settings-animation-interval-ms" type="i"><default>16</default><summary>Quick settings animation interval</summary></key>
+    <key name="quick-settings-open-scale" type="d"><default>1.08</default><summary>Quick settings open stamp scale (start size, settles to 1.0)</summary></key>
+    <key name="quick-settings-enable-adaptive-text-color" type="b"><default>true</default><summary>Adaptive quick settings text</summary></key>
+    <key name="quick-settings-sample-interval-ms" type="i"><default>400</default><summary>Quick settings sample interval</summary></key>
+    <key name="quick-settings-glass-expand" type="i"><default>12</default><summary>Quick settings expansion</summary></key>
+    <key name="quick-settings-x-offset" type="i"><default>0</default><summary>Quick settings x offset</summary></key>
+    <key name="quick-settings-y-offset" type="i"><default>17</default><summary>Quick settings y offset</summary></key>
+    <key name="quick-settings-tint-color" type="s"><default>"#0a4f9c"</default><summary>Quick settings tint</summary></key>
+    <key name="quick-settings-tint-strength" type="d"><default>0.18</default><summary>Quick settings tint strength</summary></key>
+    <key name="quick-settings-blur-radius" type="i"><default>32</default><summary>Quick settings blur radius</summary></key>
+    <key name="quick-settings-corner-radius" type="d"><default>24.0</default><summary>Quick settings corner radius</summary></key>
+    <key name="quick-settings-layout" type="s"><default>""</default><summary>Custom quick settings layout (JSON: items with key/span, hidden keys)</summary></key>
+    <key name="enable-osd-glass" type="b"><default>true</default><summary>Enable on-screen display glass</summary></key>
+    <key name="osd-enable-adaptive-text-color" type="b"><default>true</default><summary>Adaptive OSD text</summary></key>
+    <key name="osd-sample-interval-ms" type="i"><default>400</default><summary>OSD sample interval</summary></key>
+    <key name="osd-glass-expand" type="i"><default>12</default><summary>OSD expansion</summary></key>
+    <key name="osd-y-offset" type="i"><default>17</default><summary>OSD y offset</summary></key>
+    <key name="osd-tint-color" type="s"><default>"#0a4f9c"</default><summary>OSD tint</summary></key>
+    <key name="osd-tint-strength" type="d"><default>0.18</default><summary>OSD tint strength</summary></key>
+    <key name="osd-blur-radius" type="i"><default>20</default><summary>OSD blur radius</summary></key>
+    <key name="osd-corner-radius" type="d"><default>24.0</default><summary>OSD corner radius</summary></key>
+    <key name="glass-max-z" type="d"><default>25.0</default><summary>Maximum Z depth</summary></key>
+    <key name="glass-displacement-scale" type="d"><default>78.5</default><summary>Displacement scale</summary></key>
+    <key name="glass-edge-smoothing" type="d"><default>2.0</default><summary>Edge smoothing</summary></key>
+    <key name="glass-profile-shape-n" type="d"><default>7.0</default><summary>Profile shape</summary></key>
+    <key name="glass-ior" type="d"><default>2.4</default><summary>Index of refraction</summary></key>
+    <key name="glass-chroma-strength" type="d"><default>0.006</default><summary>Chromatic aberration</summary></key>
+    <key name="glass-specular-intensity" type="d"><default>0.0</default><summary>Specular intensity</summary></key>
+    <key name="glass-shininess" type="d"><default>42.0</default><summary>Shininess</summary></key>
+    <key name="glass-rim-width" type="d"><default>5.0</default><summary>Rim width</summary></key>
+    <key name="glass-rim-intensity" type="d"><default>0.6</default><summary>Rim intensity</summary></key>
+    <key name="glass-rim-directional-power" type="d"><default>2.7</default><summary>Rim directional power</summary></key>
+    <key name="glass-rim-power" type="d"><default>6.0</default><summary>Rim power</summary></key>
+    <key name="glass-rim-light-color-intensity" type="d"><default>1.4</default><summary>Rim light intensity</summary></key>
+    <key name="glass-sheen-intensity" type="d"><default>0.32</default><summary>Sheen intensity</summary></key>
+    <key name="glass-light-angle-deg" type="d"><default>50.0</default><summary>Light angle</summary></key>
+    <key name="output-logs" type="b"><default>false</default><summary>Output logs</summary></key>
+  </schema>
+</schemalist>

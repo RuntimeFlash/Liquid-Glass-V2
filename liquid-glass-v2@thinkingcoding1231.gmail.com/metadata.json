@@ -1,0 +1,10 @@
+{
+  "name": "Liquid Glass v2",
+  "description": "GPU-optimized liquid glass effect for GNOME Shell",
+  "uuid": "liquid-glass-v2@thinkingcoding1231.gmail.com",
+  "settings-schema": "org.gnome.shell.extensions.liquid-glass-v2@thinkingcoding1231.gmail.com",
+  "shell-version": [
+    "49",
+    "50"
+  ]
+}
