@@ -193,6 +193,9 @@ export class QuickSettingsLayoutEditor {
     else if (hidden) button.set_size(172, 68);
     const content = new St.BoxLayout({ style_class: 'liquid-glass-editor-tile-content', x_expand: true });
     const icon = new St.Icon({ icon_name: tile.iconName || 'emblem-system-symbolic', style_class: 'liquid-glass-editor-tile-icon' });
+    content.y_align = Clutter.ActorAlign.CENTER;
+    content.y_expand = true;
+    icon.y_align = Clutter.ActorAlign.CENTER;
     content.add_child(icon);
     if (!isCompact) {
       const labels = new St.BoxLayout({ vertical: true, x_expand: true, style_class: 'liquid-glass-editor-tile-labels' });
@@ -206,6 +209,9 @@ export class QuickSettingsLayoutEditor {
     } else {
       content.x_align = Clutter.ActorAlign.CENTER;
       content.x_expand = false;
+      icon.x_align = Clutter.ActorAlign.CENTER;
+      icon.x_expand = true;
+      icon.y_expand = true;
     }
     button.set_child(content);
     this._bindDrag(button, button, tile, hidden);

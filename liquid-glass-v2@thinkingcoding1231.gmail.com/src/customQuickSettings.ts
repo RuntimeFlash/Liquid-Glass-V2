@@ -415,6 +415,9 @@ export class CustomQuickSettingsRenderer {
     }
     let box = new St.BoxLayout({ style_class: 'liquid-glass-custom-card-content', x_expand: true });
     let icon = new St.Icon({ icon_name: control.iconName, style_class: 'liquid-glass-custom-card-icon' });
+    box.y_align = Clutter.ActorAlign.CENTER;
+    box.y_expand = true;
+    icon.y_align = Clutter.ActorAlign.CENTER;
     box.add_child(icon);
 
     if (control.kind === 'wide') {
@@ -434,12 +437,12 @@ export class CustomQuickSettingsRenderer {
       (card as any)._liquidGlassControlKey = control.key;
     }
 
-    box.y_align = Clutter.ActorAlign.CENTER;
-    icon.y_align = Clutter.ActorAlign.CENTER;
     if (control.kind === 'single') {
       box.x_align = Clutter.ActorAlign.CENTER;
       box.y_expand = true;
       icon.x_align = Clutter.ActorAlign.CENTER;
+      icon.x_expand = true;
+      icon.y_expand = true;
     }
     card.set_child(box);
     if (control.submenu)
