@@ -23,12 +23,17 @@ type LayoutItem = { key: string; span: number; mode?: TileMode };
 type SavedLayout = { items: LayoutItem[]; hidden: string[] };
 
 const DEFAULT_GRID_ORDER: [string, number][] = [
-  ['network', 2], ['dark', 1], ['airplane', 1],
-  ['bluetooth', 2], ['night', 1], ['dnd', 1],
+  ['network', 2], ['night', 1], ['airplane', 1],
+  ['bluetooth', 2], ['dark', 1], ['dnd', 1],
   ['power-mode', 2], ['caffeine', 2],
 ];
 
-const DEFAULT_HIDDEN: string[] = ['battery', 'suspend'];
+const DEFAULT_HIDDEN: string[] = [
+  'battery',
+  'ext:keyboard-display-brightness-symbolic',
+  'ext:auto-rotate-rotation-allowed-symbolic',
+  'ext:no-background-apps',
+];
 
 /**
  * Visual replacement for GNOME's quick-settings grid. Native controls remain

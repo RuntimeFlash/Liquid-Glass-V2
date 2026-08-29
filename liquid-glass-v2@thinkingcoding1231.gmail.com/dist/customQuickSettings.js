@@ -4,11 +4,16 @@ import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { QuickSettingsLayoutEditor } from './layoutEditor.js';
 const DEFAULT_GRID_ORDER = [
-    ['network', 2], ['dark', 1], ['airplane', 1],
-    ['bluetooth', 2], ['night', 1], ['dnd', 1],
+    ['network', 2], ['night', 1], ['airplane', 1],
+    ['bluetooth', 2], ['dark', 1], ['dnd', 1],
     ['power-mode', 2], ['caffeine', 2],
 ];
-const DEFAULT_HIDDEN = ['battery', 'suspend'];
+const DEFAULT_HIDDEN = [
+    'battery',
+    'ext:keyboard-display-brightness-symbolic',
+    'ext:auto-rotate-rotation-allowed-symbolic',
+    'ext:no-background-apps',
+];
 /**
  * Visual replacement for GNOME's quick-settings grid. Native controls remain
  * the source of truth; this renderer only mirrors their state and activation.
