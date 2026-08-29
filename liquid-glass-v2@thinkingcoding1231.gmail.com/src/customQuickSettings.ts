@@ -447,7 +447,8 @@ export class CustomQuickSettingsRenderer {
     if (control.kind === 'wide') {
       let labels = new St.BoxLayout({ vertical: true, x_expand: true, style_class: 'liquid-glass-custom-card-labels' });
       let subtitleText = this._subtitle(control.source, control.key);
-      labels.add_child(new St.Label({ text: control.title, style_class: 'liquid-glass-custom-card-title' }));
+      let titleLabel = new St.Label({ text: control.title, style_class: 'liquid-glass-custom-card-title' });
+      labels.add_child(titleLabel);
       let subtitleLabel = new St.Label({
         text: subtitleText,
         style_class: 'liquid-glass-custom-card-subtitle',
@@ -457,6 +458,7 @@ export class CustomQuickSettingsRenderer {
       box.add_child(labels);
       // Store the subtitle label so _syncCardState can update it.
       (card as any)._liquidGlassSubtitleLabel = subtitleLabel;
+      (card as any)._liquidGlassTitleLabel = titleLabel;
       (card as any)._liquidGlassSubtitleFixed = false;
       (card as any)._liquidGlassControlKey = control.key;
     }
@@ -739,6 +741,7 @@ export class CustomQuickSettingsRenderer {
   }
 
   private _title(source: any, key: string) {
+    if (key === 'network') return this._networkDetails().title;
     return this._labels(source)[0] || ({
       network: 'Network', bluetooth: 'Bluetooth', dark: 'Dark Mode', night: 'Night Light',
       airplane: 'Airplane Mode', dnd: 'Do Not Disturb', caffeine: 'Caffeine', 'power-mode': 'Power Mode',
@@ -748,8 +751,7 @@ export class CustomQuickSettingsRenderer {
 
   private _subtitle(source: any, key?: string) {
     if (key === 'network') {
-      const connected = this._networkConnected();
-      return (connected ?? this._isChecked(source, key)) ? 'On' : 'Off';
+      return this._networkDetails().subtitle;
     }
 
     // Bluetooth's native labels and checked state can lag behind the actual
@@ -888,6 +890,29 @@ export class CustomQuickSettingsRenderer {
     }
   }
 
+  private _networkDetails(): { title: string; subtitle: string } {
+    try {
+      const network = (Main.panel.statusArea.quickSettings as any)?._network;
+      const client = network?._client;
+      const primary = client?.primary_connection ?? client?.get_primary_connection?.();
+      if (primary) {
+        const state = primary.state ?? primary.get_state?.();
+        const active = state === 2 || `${state}`.toLowerCase() === 'activated';
+        const connection = primary.connection ?? primary.get_connection?.();
+        const type = `${primary.connection_type ?? primary.type ?? primary.get_connection_type?.() ?? connection?.connection_type ?? ''}`.toLowerCase();
+        const name = `${primary.id ?? primary.get_id?.() ?? connection?.id ?? connection?.get_id?.() ?? ''}`.trim();
+        const ethernet = /ethernet|wired|802-3/.test(type);
+        if (ethernet) return { title: 'Ethernet', subtitle: active ? 'Connected' : 'Connecting…' };
+        if (active) return { title: 'Wi-Fi', subtitle: name || 'Connected' };
+      }
+      const connected = this._networkConnected();
+      if (connected) return { title: 'Wi-Fi', subtitle: 'On' };
+      return { title: 'Network', subtitle: 'Off' };
+    } catch (e) {
+      return { title: 'Network', subtitle: 'Off' };
+    }
+  }
+
   private _syncCardState(card: any, source: any, icon: any) {
     if (!card || !source) return;
     let key = (card as any)._liquidGlassControlKey;
@@ -904,6 +929,10 @@ export class CustomQuickSettingsRenderer {
     let subtitleFixed = (card as any)._liquidGlassSubtitleFixed === true;
     if (subtitleLabel && !subtitleFixed) {
       subtitleLabel.text = this._subtitle(source, key);
+    }
+    if (key === 'network') {
+      const titleLabel = (card as any)._liquidGlassTitleLabel;
+      if (titleLabel) titleLabel.text = this._networkDetails().title;
     }
     this.manager._wakeCardBackingSync?.();
   }

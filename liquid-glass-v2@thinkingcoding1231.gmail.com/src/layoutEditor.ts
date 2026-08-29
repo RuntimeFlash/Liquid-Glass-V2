@@ -23,6 +23,7 @@ type DragState = {
   active: boolean;
   originIndex: number;
   gapIndex: number;
+  targetKey: string | null;
 };
 
 const DRAG_THRESHOLD = 8;
@@ -38,7 +39,7 @@ export class QuickSettingsLayoutEditor {
   private _tiles: EditorTile[] = [];
   private _actors = new Map<string, St.Button>();
   private _gridWidget: St.Widget | null = null;
-  private _trayInner: St.Widget | null = null;
+  private _trayInner: St.BoxLayout | null = null;
   private _selectionBar: St.BoxLayout | null = null;
   private _selectedKey: string | null = null;
   private _drag: DragState | null = null;
@@ -76,10 +77,7 @@ export class QuickSettingsLayoutEditor {
 
     const tray = new St.BoxLayout({ vertical: true, style_class: 'liquid-glass-editor-tray', x_expand: true });
     tray.add_child(new St.Label({ text: 'Hidden controls', style_class: 'liquid-glass-editor-tray-label' }));
-    this._trayInner = new St.Widget({
-      style_class: 'liquid-glass-editor-tray-inner', x_expand: true,
-      layout_manager: new Clutter.FlowLayout({ orientation: Clutter.Orientation.HORIZONTAL, homogeneous: false, row_spacing: 8, column_spacing: 8 }),
-    });
+    this._trayInner = new St.BoxLayout({ vertical: true, style_class: 'liquid-glass-editor-tray-inner', x_expand: true });
     tray.add_child(this._trayInner);
     page.add_child(tray);
     content.add_child(scroll);
@@ -143,7 +141,7 @@ export class QuickSettingsLayoutEditor {
     if (tray) tray.visible = hiddenTiles.length > 0;
     // FlowLayout does not request height from its children in this shell
     // version, so reserve a row whenever a hidden control exists.
-    this._trayInner.set_height(hiddenTiles.length > 0 ? 68 : 0);
+    this._trayInner.set_height(hiddenTiles.length > 0 ? hiddenTiles.length * 60 + Math.max(0, hiddenTiles.length - 1) * 8 : 0);
     for (const tile of hiddenTiles) {
       const actor = this._makeTile(tile, true);
       this._actors.set(tile.key, actor);
@@ -191,9 +189,9 @@ export class QuickSettingsLayoutEditor {
     let style = hidden ? 'liquid-glass-editor-tile liquid-glass-editor-tile-hidden liquid-glass-editor-tile-wide' :
       isCompact ? 'liquid-glass-editor-tile liquid-glass-editor-tile-single' : 'liquid-glass-editor-tile liquid-glass-editor-tile-wide';
     if (tile.key === this._selectedKey) style += ' liquid-glass-editor-tile-selected';
-    const button = new St.Button({ style_class: style, reactive: true, can_focus: true, x_expand: !isCompact && !hidden, x_align: isCompact ? Clutter.ActorAlign.CENTER : Clutter.ActorAlign.FILL });
+    const button = new St.Button({ style_class: style, reactive: true, can_focus: true, x_expand: !isCompact, x_align: isCompact ? Clutter.ActorAlign.CENTER : Clutter.ActorAlign.FILL });
     if (isCompact) button.set_size(68, 68);
-    else if (hidden) button.set_size(172, 68);
+    else if (hidden) button.set_height(60);
     const content = new St.BoxLayout({ style_class: 'liquid-glass-editor-tile-content', x_expand: true });
     const icon = new St.Icon({ icon_name: tile.iconName || 'emblem-system-symbolic', style_class: 'liquid-glass-editor-tile-icon' });
     content.y_align = Clutter.ActorAlign.CENTER;
@@ -225,7 +223,7 @@ export class QuickSettingsLayoutEditor {
     target.connect('button-press-event', () => {
       if (hidden) return Clutter.EVENT_PROPAGATE;
       const [x, y] = global.get_pointer();
-      this._drag = { tile, actor, grabX: x, grabY: y, active: false, originIndex: -1, gapIndex: -1 };
+      this._drag = { tile, actor, grabX: x, grabY: y, active: false, originIndex: -1, gapIndex: -1, targetKey: null };
       return Clutter.EVENT_STOP;
     });
     target.connect('motion-event', () => {
@@ -264,7 +262,7 @@ export class QuickSettingsLayoutEditor {
     if (!center) return;
     const others = this._visibleTiles().filter(tile => tile.key !== this._drag!.tile.key);
     let gap = others.length;
-    let best: { index: number; rect: any; distance: number } | null = null;
+    let best: { index: number; key: string; rect: any; distance: number } | null = null;
     for (let index = 0; index < others.length; index++) {
       const actor = this._actors.get(others[index].key);
       if (!actor) continue;
@@ -274,12 +272,17 @@ export class QuickSettingsLayoutEditor {
       const dx = center[0] - (rect.x + rect.w / 2);
       const dy = center[1] - (rect.y + rect.h / 2);
       const distance = Math.abs(dx) + Math.abs(dy) * 1.35;
-      if (!best || distance < best.distance) best = { index, rect, distance };
+      if (!best || distance < best.distance) best = { index, key: others[index].key, rect, distance };
     }
     if (best) {
       const isBelow = center[1] > best.rect.y + best.rect.h * 0.72;
       const isRight = center[0] >= best.rect.x + best.rect.w / 2;
       gap = best.index + (isBelow || isRight ? 1 : 0);
+    }
+    if (this._drag.targetKey !== best?.key) {
+      if (this._drag.targetKey) this._actors.get(this._drag.targetKey)?.remove_style_class_name('liquid-glass-editor-drop-target');
+      if (best?.key) this._actors.get(best.key)?.add_style_class_name('liquid-glass-editor-drop-target');
+      this._drag.targetKey = best?.key ?? null;
     }
     if (gap === this._drag.gapIndex) return;
     this._drag.gapIndex = gap;
@@ -306,12 +309,22 @@ export class QuickSettingsLayoutEditor {
     const [width, height] = source.get_size();
     ghost.set_size(width, height);
     global.stage.add_child(ghost);
-    try { global.stage.set_child_above_sibling(ghost, null); source.opacity = 0; } catch (e) {}
+    try { global.stage.set_child_above_sibling(ghost, null); source.opacity = 92; source.add_style_class_name('liquid-glass-editor-tile-dragging'); } catch (e) {}
     this._ghost = ghost;
   }
   private _moveGhost(x: number, y: number) { if (!this._ghost) return; const [w, h] = this._ghost.get_size(); this._ghost.set_position(Math.round(x - w / 2), Math.round(y - h / 2)); }
   private _ghostCenter(): [number, number] | null { if (!this._ghost) return null; const [x, y] = this._ghost.get_transformed_position(); const [w, h] = this._ghost.get_transformed_size(); return [x + w / 2, y + h / 2]; }
-  private _endDrag() { if (this._drag) { try { this._drag.actor.opacity = 255; } catch (e) {} } this._drag = null; this._destroyGhost(); }
+  private _endDrag() {
+    if (this._drag) {
+      try {
+        this._drag.actor.opacity = 255;
+        this._drag.actor.remove_style_class_name('liquid-glass-editor-tile-dragging');
+        if (this._drag.targetKey) this._actors.get(this._drag.targetKey)?.remove_style_class_name('liquid-glass-editor-drop-target');
+      } catch (e) {}
+    }
+    this._drag = null;
+    this._destroyGhost();
+  }
   private _destroyGhost() { try { this._ghost?.destroy(); } catch (e) {} this._ghost = null; }
   private _rect(actor: any) { const [x, y] = actor.get_transformed_position(); const [w, h] = actor.get_transformed_size(); return { x, y, w, h }; }
   private _contains(rect: any, x: number, y: number) { return rect.w > 0 && rect.h > 0 && x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h; }

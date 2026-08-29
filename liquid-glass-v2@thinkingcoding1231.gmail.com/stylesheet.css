@@ -926,6 +926,21 @@
     box-shadow: 0 0 18px rgba(10, 132, 255, 0.22) !important;
 }
 
+.liquid-glass-editor-tile-dragging {
+    border: 1px dashed rgba(130, 204, 255, 0.9) !important;
+    background-color: rgba(10, 132, 255, 0.16) !important;
+}
+
+.liquid-glass-editor-drop-target {
+    box-shadow: 0 0 0 2px #0a84ff, 0 0 20px rgba(10, 132, 255, 0.48) !important;
+}
+
+.liquid-glass-editor-ghost {
+    opacity: 220 !important;
+    border: 2px solid rgba(180, 230, 255, 0.92) !important;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.38) !important;
+}
+
 .liquid-glass-editor-drag-handle {
     min-width: 26px !important;
     min-height: 30px !important;
@@ -1034,6 +1049,7 @@
 
 .liquid-glass-editor-tray-inner {
     min-height: 0 !important;
+    spacing: 8px !important;
 }
 
 .liquid-glass-editor-tray-highlight {
