@@ -184,19 +184,24 @@ export class QuickSettingsLayoutEditor {
   }
 
   private _makeTile(tile: EditorTile, hidden: boolean): St.Button {
-    const isCompact = hidden || tile.mode === 'circle';
-    let style = hidden ? 'liquid-glass-editor-tile liquid-glass-editor-tile-hidden' :
+    const isCompact = !hidden && tile.mode === 'circle';
+    let style = hidden ? 'liquid-glass-editor-tile liquid-glass-editor-tile-hidden liquid-glass-editor-tile-wide' :
       isCompact ? 'liquid-glass-editor-tile liquid-glass-editor-tile-single' : 'liquid-glass-editor-tile liquid-glass-editor-tile-wide';
     if (tile.key === this._selectedKey) style += ' liquid-glass-editor-tile-selected';
-    const button = new St.Button({ style_class: style, reactive: true, can_focus: true, x_expand: !isCompact, x_align: isCompact ? Clutter.ActorAlign.CENTER : Clutter.ActorAlign.FILL });
+    const button = new St.Button({ style_class: style, reactive: true, can_focus: true, x_expand: !isCompact && !hidden, x_align: isCompact ? Clutter.ActorAlign.CENTER : Clutter.ActorAlign.FILL });
     if (isCompact) button.set_size(68, 68);
+    else if (hidden) button.set_size(172, 68);
     const content = new St.BoxLayout({ style_class: 'liquid-glass-editor-tile-content', x_expand: true });
     const icon = new St.Icon({ icon_name: tile.iconName || 'emblem-system-symbolic', style_class: 'liquid-glass-editor-tile-icon' });
     content.add_child(icon);
     if (!isCompact) {
       const labels = new St.BoxLayout({ vertical: true, x_expand: true, style_class: 'liquid-glass-editor-tile-labels' });
       labels.add_child(new St.Label({ text: tile.title, style_class: 'liquid-glass-editor-tile-title' }));
-      if (tile.slider) labels.add_child(new St.Label({ text: 'Slider', style_class: 'liquid-glass-editor-tile-subtitle' }));
+      labels.add_child(new St.Label({
+        text: hidden ? 'Click to restore' : tile.slider ? 'Slider' : '',
+        style_class: 'liquid-glass-editor-tile-subtitle',
+        visible: hidden || !!tile.slider,
+      }));
       content.add_child(labels);
     } else {
       content.x_align = Clutter.ActorAlign.CENTER;
@@ -238,7 +243,7 @@ export class QuickSettingsLayoutEditor {
       else { this._selectedKey = tile.key; this._rebuild(); }
       return Clutter.EVENT_STOP;
     });
-    if (hidden) target.connect('clicked', () => { this._selectedKey = tile.key; this._rebuild(); });
+    if (hidden) target.connect('clicked', () => this._setHidden(tile, false));
   }
 
   private _setMode(tile: EditorTile, mode: TileMode) { if (tile.slider && mode === 'circle') return; tile.mode = mode; this._rebuild(); }

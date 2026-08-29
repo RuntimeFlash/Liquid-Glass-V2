@@ -994,8 +994,7 @@
     padding: 12px !important;
 }
 
-.liquid-glass-editor-tile-single .liquid-glass-editor-tile-content,
-.liquid-glass-editor-tile-hidden .liquid-glass-editor-tile-content {
+.liquid-glass-editor-tile-single .liquid-glass-editor-tile-content {
     padding: 0 !important;
 }
 
