@@ -5,7 +5,7 @@ import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { QuickSettingsLayoutEditor, EditorTile, TileMode } from './layoutEditor.js';
 
-type CardKind = 'wide' | 'single' | 'footer' | 'slider';
+type CardKind = 'wide' | 'single' | 'slider';
 
 type Control = {
   key: string;
@@ -16,16 +16,14 @@ type Control = {
   squircle?: boolean;
   submenu?: 'wifi' | 'bluetooth' | 'caffeine' | 'power';
   mode?: TileMode;
-  customTitle?: string;
-  customSubtitle?: string;
 };
 
-type LayoutItem = { key: string; span: number; mode?: TileMode; customTitle?: string; customSubtitle?: string };
+type LayoutItem = { key: string; span: number; mode?: TileMode };
 
 type SavedLayout = { items: LayoutItem[]; hidden: string[] };
 
 const DEFAULT_GRID_ORDER: [string, number][] = [
-  ['wifi', 2], ['dark', 1], ['airplane', 1],
+  ['network', 2], ['dark', 1], ['airplane', 1],
   ['bluetooth', 2], ['night', 1], ['dnd', 1],
   ['power-mode', 2], ['caffeine', 2],
 ];
@@ -43,6 +41,7 @@ export class CustomQuickSettingsRenderer {
   private movedSliders: { actor: any; parent: any; index: number }[] = [];
   private signalIds: { target: any; id: number }[] = [];
   private _renderedKeys: Set<string> = new Set();
+  private _renderedSources = new Map<string, any>();
   private _layoutEditor: QuickSettingsLayoutEditor | null = null;
 
   constructor(manager: any) {
@@ -112,7 +111,7 @@ export class CustomQuickSettingsRenderer {
     if (controls.size === this._renderedKeys.size) {
       let changed = false;
       for (let key of this._renderedKeys) {
-        if (!controls.has(key)) { changed = true; break; }
+        if (!controls.has(key) || controls.get(key)?.source !== this._renderedSources.get(key)) { changed = true; break; }
       }
       if (!changed)
         return;
@@ -131,6 +130,7 @@ export class CustomQuickSettingsRenderer {
     this.root = null;
     this.nativeGrid = null;
     this._renderedKeys = new Set();
+    this._renderedSources.clear();
   }
 
   private _build() {
@@ -139,6 +139,7 @@ export class CustomQuickSettingsRenderer {
 
     let controls = this._discoverControls();
     this._renderedKeys = new Set(controls.keys());
+    this._renderedSources = new Map(Array.from(controls, ([key, control]) => [key, control.source]));
     let grid = new St.Widget({
       style_class: 'liquid-glass-custom-grid',
       layout_manager: new Clutter.GridLayout({
@@ -175,19 +176,8 @@ export class CustomQuickSettingsRenderer {
       }
     }
     for (let [key, control] of controls) {
-      if (seen.has(key) || control.kind === 'footer' || hidden.has(key))
+      if (seen.has(key) || hidden.has(key))
         continue;
-      // Without a saved layout, keep sliders pinned below the grid exactly as
-      // before; once a custom layout is saved they participate in the grid.
-      if (!saved && control.kind === 'slider')
-        continue;
-      // Phase 6: default-hide unrecognized extension-contributed tiles so the
-      // grid isn't filled with junk in column 4. They remain available in the
-      // editor's Hidden tray to drag in if the user wants them.
-      if (!saved && key.startsWith('ext:') && control.kind !== 'slider') {
-        hidden.add(key);
-        continue;
-      }
       items.push({ key, span: this._defaultSpan(control) });
     }
 
@@ -217,8 +207,6 @@ export class CustomQuickSettingsRenderer {
           kind: effKind,
           squircle: effKind === 'wide',
           mode,
-          customTitle: item.customTitle,
-          customSubtitle: item.customSubtitle,
         });
       }
       if (card) {
@@ -231,42 +219,6 @@ export class CustomQuickSettingsRenderer {
         row++;
       }
     }
-
-    // Any sliders not placed by the layout stay pinned below the grid.
-    this._moveSliders();
-
-    let footer = new St.Widget({
-      style_class: 'liquid-glass-custom-grid liquid-glass-custom-footer',
-      layout_manager: new Clutter.GridLayout({
-        column_homogeneous: true,
-        column_spacing: 10,
-        row_spacing: 10,
-      }),
-      x_expand: true,
-    });
-    let footerLayout = footer.layout_manager as Clutter.GridLayout;
-    let footerItems: [string, number][] = [
-      ['screenshot', 1],
-      ['settings', 1],
-      ['lock', 1],
-      ['power', 1],
-    ];
-    let footerColumn = 0;
-    let footerRow = 0;
-    for (let [key, span] of footerItems) {
-      let control = controls.get(key);
-      if (!control || hidden.has(key))
-        continue;
-      if (footerColumn + span > 4) {
-        footerColumn = 0;
-        footerRow++;
-      }
-      let card = this._createCard(control);
-      footerLayout.attach(card, footerColumn, footerRow, span, 1);
-      footerColumn += span;
-    }
-    if (footer.get_children().length > 0)
-      this.root.add_child(footer);
 
     this.root.add_child(this._createEditControlsButton(controls));
   }
@@ -288,20 +240,16 @@ export class CustomQuickSettingsRenderer {
           .filter((it: any) => it && typeof it.key === 'string')
           .map((it: any) => {
             let span = it.span === 2 ? 2 : 1;
-            let mode: TileMode | undefined =
-              it.mode === 'circle' || it.mode === 'wide' || it.mode === 'pill'
-                ? it.mode
-                : (span === 2 ? 'wide' : 'circle');
             return {
-              key: it.key,
+              // v2 used `wifi`; network state now has one permanent key for
+              // both Wi-Fi and Ethernet so a cable can never add a new tile.
+              key: it.key === 'wifi' ? 'network' : it.key,
               span,
-              mode,
-              customTitle: typeof it.customTitle === 'string' ? it.customTitle : undefined,
-              customSubtitle: typeof it.customSubtitle === 'string' ? it.customSubtitle : undefined,
+              mode: span === 2 ? 'wide' : 'circle',
             };
           }),
         hidden: Array.isArray(parsed.hidden)
-          ? parsed.hidden.filter((k: any) => typeof k === 'string')
+          ? parsed.hidden.filter((k: any) => typeof k === 'string').map((key: string) => key === 'wifi' ? 'network' : key)
           : [],
       };
     } catch (e) {
@@ -373,10 +321,9 @@ export class CustomQuickSettingsRenderer {
         seen.add(key);
       }
     }
-    // Everything except the fixed footer row is editable, including battery,
-    // suspend and sliders (they start in the hidden tray).
+    // Every discovered control is editable, including the former footer.
     for (let [key, control] of controls) {
-      if (seen.has(key) || control.kind === 'footer')
+      if (seen.has(key))
         continue;
       let mode: TileMode = control.kind === 'wide' || control.kind === 'slider' ? 'wide' : 'circle';
       items.push({ key, span: this._defaultSpan(control), mode });
@@ -391,8 +338,8 @@ export class CustomQuickSettingsRenderer {
         mode,
         slider: control.kind === 'slider',
         hidden: hiddenSet.has(item.key),
-        customTitle: item.customTitle,
-        customSubtitle: item.customSubtitle,
+        defaultMode: control.kind === 'slider' ? 'wide' : this._defaultSpan(control) === 2 ? 'wide' : 'circle',
+        defaultHidden: DEFAULT_HIDDEN.includes(item.key),
       };
     });
   }
@@ -458,7 +405,7 @@ export class CustomQuickSettingsRenderer {
         : Clutter.ActorAlign.CENTER,
       y_align: Clutter.ActorAlign.CENTER,
     });
-    if (control.kind === 'single' || control.kind === 'footer') {
+    if (control.kind === 'single') {
       card.set_size(68, 68);
     }
     let box = new St.BoxLayout({ style_class: 'liquid-glass-custom-card-content', x_expand: true });
@@ -484,7 +431,7 @@ export class CustomQuickSettingsRenderer {
 
     box.y_align = Clutter.ActorAlign.CENTER;
     icon.y_align = Clutter.ActorAlign.CENTER;
-    if (control.kind === 'single' || (control.kind === 'footer' && !control.squircle)) {
+    if (control.kind === 'single') {
       box.x_align = Clutter.ActorAlign.CENTER;
       box.y_expand = true;
       icon.x_align = Clutter.ActorAlign.CENTER;
@@ -572,8 +519,15 @@ export class CustomQuickSettingsRenderer {
       let title = `${this._labels(source).join(' ')} ${this._accessibleName(source)}`.toLowerCase();
       let icon = this._icon(source);
       let key = this._keyFor(title, icon);
-      if (!key || controls.has(key))
+      if (!key)
         continue;
+      // Multiple native actors can represent one logical control (notably
+      // Wi-Fi plus a newly connected Ethernet device). Mark aliases as
+      // claimed so the auto-detector cannot turn them into a new layout tile.
+      if (controls.has(key)) {
+        matchedRoots.add(root);
+        continue;
+      }
       matchedRoots.add(root);
       let src = source;
       if (`${source.style_class || ''}`.includes('quick-toggle-menu-button')) {
@@ -583,16 +537,15 @@ export class CustomQuickSettingsRenderer {
           p = p.get_parent?.();
         }
       }
-      let kind: CardKind = ['wifi', 'bluetooth', 'power-mode', 'caffeine'].includes(key) ? 'wide' :
-        ['screenshot', 'settings', 'battery', 'power', 'lock'].includes(key) ? 'footer' : 'single';
-      let submenu = key === 'wifi' || key === 'bluetooth' || key === 'caffeine' || key === 'power-mode' || key === 'power'
-        ? (key === 'power-mode' || key === 'power' ? 'power' : key) as Control['submenu']
+      let kind: CardKind = ['network', 'bluetooth', 'power-mode', 'caffeine'].includes(key) ? 'wide' : 'single';
+      let submenu = key === 'network' || key === 'bluetooth' || key === 'caffeine' || key === 'power-mode' || key === 'power'
+        ? (key === 'network' ? 'wifi' : key === 'power-mode' || key === 'power' ? 'power' : key) as Control['submenu']
         : undefined;
       controls.set(key, {
         key,
         source: src,
         title: this._title(src, key),
-        iconName: kind === 'footer' ? this._fallbackIcon(key) : (this._icon(src) || this._fallbackIcon(key)),
+        iconName: this._icon(src) || this._fallbackIcon(key),
         kind,
         squircle: kind === 'wide',
         submenu,
@@ -695,7 +648,8 @@ export class CustomQuickSettingsRenderer {
 
   private _keyFor(text: string, icon: string) {
     let value = `${text} ${icon}`.toLowerCase();
-    if (value.includes('wi-fi') || value.includes('wifi') || value.includes('wireless')) return 'wifi';
+    if (value.includes('ethernet') || value.includes('wired')) return 'network';
+    if (value.includes('wi-fi') || value.includes('wifi') || value.includes('wireless') || value.includes('network')) return 'network';
     if (value.includes('bluetooth')) return 'bluetooth';
     if (value.includes('dark mode') || value.includes('night theme')) return 'dark';
     if (value.includes('night light')) return 'night';
@@ -754,7 +708,7 @@ export class CustomQuickSettingsRenderer {
 
   private _title(source: any, key: string) {
     return this._labels(source)[0] || ({
-      wifi: 'Wi-Fi', bluetooth: 'Bluetooth', dark: 'Dark Mode', night: 'Night Light',
+      network: 'Network', bluetooth: 'Bluetooth', dark: 'Dark Mode', night: 'Night Light',
       airplane: 'Airplane Mode', dnd: 'Do Not Disturb', caffeine: 'Caffeine', 'power-mode': 'Power Mode',
       screenshot: 'Screenshot', settings: 'Settings', battery: 'Battery', power: 'Power', suspend: 'Suspend', lock: 'Lock',
     } as Record<string, string>)[key] || 'Quick Setting';
@@ -798,7 +752,7 @@ export class CustomQuickSettingsRenderer {
   }
 
   private _fallbackIcon(key: string) {
-    return ({ wifi: 'network-wireless-signal-good-symbolic', bluetooth: 'bluetooth-active-symbolic', dark: 'weather-clear-night-symbolic', night: 'night-light-symbolic', airplane: 'airplane-mode-symbolic', dnd: 'notifications-disabled-symbolic', caffeine: 'caffeine-cup-full-symbolic', 'power-mode': 'power-profile-balanced-symbolic', screenshot: 'camera-photo-symbolic', settings: 'emblem-system-symbolic', battery: 'battery-level-100-symbolic', power: 'system-shutdown-symbolic', suspend: 'media-playback-pause-symbolic', lock: 'system-lock-screen-symbolic' } as Record<string, string>)[key] || 'emblem-system-symbolic';
+    return ({ network: 'network-wireless-signal-good-symbolic', bluetooth: 'bluetooth-active-symbolic', dark: 'weather-clear-night-symbolic', night: 'night-light-symbolic', airplane: 'airplane-mode-symbolic', dnd: 'notifications-disabled-symbolic', caffeine: 'caffeine-cup-full-symbolic', 'power-mode': 'power-profile-balanced-symbolic', screenshot: 'camera-photo-symbolic', settings: 'emblem-system-symbolic', battery: 'battery-level-100-symbolic', power: 'system-shutdown-symbolic', suspend: 'media-playback-pause-symbolic', lock: 'system-lock-screen-symbolic' } as Record<string, string>)[key] || 'emblem-system-symbolic';
   }
 
   private _activate(source: any, key?: string) {
@@ -853,7 +807,7 @@ export class CustomQuickSettingsRenderer {
       let iconName = this._icon(source);
       if (iconName) icon.icon_name = iconName;
     }
-    // Also update the subtitle text so bluetooth/wifi status stays in sync.
+    // Also update the subtitle text so Bluetooth/network status stays in sync.
     // Pill (custom) subtitles are user-authored and must not be overwritten.
     let subtitleLabel = (card as any)._liquidGlassSubtitleLabel;
     let subtitleFixed = (card as any)._liquidGlassSubtitleFixed === true;
