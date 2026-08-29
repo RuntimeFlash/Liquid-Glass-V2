@@ -747,8 +747,10 @@ export class CustomQuickSettingsRenderer {
   }
 
   private _subtitle(source: any, key?: string) {
-    if (key === 'network')
-      return this._isChecked(source, key) ? 'Connected' : 'Off';
+    if (key === 'network') {
+      const connected = this._networkConnected();
+      return (connected ?? this._isChecked(source, key)) ? 'On' : 'Off';
+    }
 
     // Bluetooth's native labels and checked state can lag behind the actual
     // controller. Read the controller first so its tint and subtitle agree.
@@ -830,6 +832,8 @@ export class CustomQuickSettingsRenderer {
       if (client) return client.active === true;
     }
     if (key === 'network') {
+      const connected = this._networkConnected();
+      if (connected !== null) return connected;
       // The checked state is often held by a nested quick-toggle rather than
       // the menu-button wrapper used as our activation source.
       let checked = false;
@@ -844,6 +848,44 @@ export class CustomQuickSettingsRenderer {
       return checked;
     }
     try { return source.checked === true || source.get_checked?.() === true || source.has_style_pseudo_class?.('checked'); } catch (e) { return false; }
+  }
+
+  /** Read NetworkManager's actual device state instead of a QuickToggle skin. */
+  private _networkConnected(): boolean | null {
+    try {
+      const network = (Main.panel.statusArea.quickSettings as any)?._network;
+      const client = network?._client;
+      if (!client) return null;
+      const checked = (actor: any): boolean | null => {
+        if (!actor) return null;
+        try {
+          return actor.checked === true || actor.get_checked?.() === true || actor.has_style_pseudo_class?.('checked') === true;
+        } catch (e) { return null; }
+      };
+      // GNOME exposes radio state through these toggles even when there is no
+      // primary connection (for example, Wi-Fi is on but scanning).
+      const radioState = checked(network?._wirelessToggle) ?? checked(network?._wiredToggle);
+      if (radioState !== null) return radioState;
+      const wirelessEnabled = client.wireless_enabled ?? client.get_wireless_enabled?.();
+      if (typeof wirelessEnabled === 'boolean') return wirelessEnabled;
+      const networkingEnabled = client.networking_enabled ?? client.get_networking_enabled?.();
+      if (typeof networkingEnabled === 'boolean' && networkingEnabled === false) return false;
+      const primary = client.primary_connection ?? client.get_primary_connection?.();
+      if (primary) {
+        const state = primary.state ?? primary.get_state?.();
+        // NMActiveConnectionState.ACTIVATED is 2.
+        return state === 2 || `${state}`.toLowerCase() === 'activated';
+      }
+      const devices = client.get_devices?.() ?? client.devices ?? [];
+      for (const device of devices) {
+        const state = device.state ?? device.get_state?.();
+        // NMDeviceState.ACTIVATED is 100.
+        if (state === 100 || `${state}`.toLowerCase() === 'activated') return true;
+      }
+      return false;
+    } catch (e) {
+      return null;
+    }
   }
 
   private _syncCardState(card: any, source: any, icon: any) {
@@ -878,6 +920,21 @@ export class CustomQuickSettingsRenderer {
   private _watch(source: any, key: string, callback: () => void) {
     for (let signal of ['notify::checked', 'notify::visible', 'notify::icon-name', 'style-changed']) {
       try { this.signalIds.push({ target: source, id: source.connect(signal, callback) }); } catch (e) {}
+    }
+
+    if (key === 'network') {
+      let client: any = null;
+      let network: any = null;
+      try { network = (Main.panel.statusArea.quickSettings as any)?._network; client = network?._client; } catch (e) {}
+      for (let signal of ['notify::primary-connection', 'notify::active-connections', 'notify::connectivity', 'device-added', 'device-removed']) {
+        try { this.signalIds.push({ target: client, id: client.connect(signal, callback) }); } catch (e) {}
+      }
+      for (let toggle of [network?._wirelessToggle, network?._wiredToggle]) {
+        for (let signal of ['notify::checked', 'notify::visible', 'style-changed']) {
+          try { this.signalIds.push({ target: toggle, id: toggle.connect(signal, callback) }); } catch (e) {}
+        }
+      }
+      return;
     }
 
     if (key !== 'bluetooth')
