@@ -1,5 +1,4 @@
 import Clutter from 'gi://Clutter';
-import GLib from 'gi://GLib';
 import St from 'gi://St';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 
@@ -25,11 +24,9 @@ type DragState = {
   originIndex: number;
   gapIndex: number;
   targetKey: string | null;
-  holdTimeoutId: number;
 };
 
-const HOLD_TO_DRAG_MS = 220;
-const CANCEL_HOLD_DISTANCE = 12;
+const DRAG_THRESHOLD = 10;
 
 /**
  * A draft-only layout editor. Nothing is written to GSettings until Save, so
@@ -62,7 +59,7 @@ export class QuickSettingsLayoutEditor {
     const content = new St.BoxLayout({ vertical: true, style_class: 'liquid-glass-editor-content', x_expand: true });
     content.add_child(new St.Label({ text: 'Edit Controls', style_class: 'liquid-glass-editor-title', x_align: Clutter.ActorAlign.CENTER }));
     content.add_child(new St.Label({
-      text: 'Tap to select · Press and hold a control to move it',
+      text: 'Tap to select · Drag a control to move it',
       style_class: 'liquid-glass-editor-hint', x_align: Clutter.ActorAlign.CENTER,
     }));
 
@@ -180,15 +177,7 @@ export class QuickSettingsLayoutEditor {
       if (column + span > 4) { column = 0; row++; }
       const actor = this._actors.get(tile.key);
       if (actor) {
-        let oldX = 0; let oldY = 0;
-        try { [oldX, oldY] = actor.get_transformed_position(); } catch (e) {}
         try { layout.attach(actor, column, row, span, 1); } catch (e) {}
-        // Allocation is applied on the next frame; easing from the old
-        // position gives the surrounding tiles a launcher-like shuffle.
-        try {
-          (actor as any).ease({ translation_x: oldX - actor.x, translation_y: oldY - actor.y, duration: 0 });
-          (actor as any).ease({ translation_x: 0, translation_y: 0, duration: 150, mode: Clutter.AnimationMode.EASE_OUT_QUAD });
-        } catch (e) {}
       }
       column += span;
       if (column >= 4) { column = 0; row++; }
@@ -234,24 +223,16 @@ export class QuickSettingsLayoutEditor {
     target.connect('button-press-event', () => {
       if (hidden) return Clutter.EVENT_PROPAGATE;
       const [x, y] = global.get_pointer();
-      const drag: DragState = { tile, actor, grabX: x, grabY: y, active: false, originIndex: -1, gapIndex: -1, targetKey: null, holdTimeoutId: 0 };
-      drag.holdTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, HOLD_TO_DRAG_MS, () => {
-        if (this._drag !== drag) return GLib.SOURCE_REMOVE;
-        this._beginDrag(drag);
-        return GLib.SOURCE_REMOVE;
-      });
-      this._drag = drag;
+      this._drag = { tile, actor, grabX: x, grabY: y, active: false, originIndex: -1, gapIndex: -1, targetKey: null };
       return Clutter.EVENT_STOP;
     });
     target.connect('motion-event', () => {
       if (!this._drag || this._drag.actor !== actor) return Clutter.EVENT_PROPAGATE;
       const [x, y] = global.get_pointer();
       if (!this._drag.active) {
-        // Moving before the hold delay is a normal selection gesture, never
-        // an accidental drag.
-        if (Math.abs(x - this._drag.grabX) > CANCEL_HOLD_DISTANCE || Math.abs(y - this._drag.grabY) > CANCEL_HOLD_DISTANCE)
-          this._cancelPendingHold();
-        return Clutter.EVENT_STOP;
+        if (Math.abs(x - this._drag.grabX) < DRAG_THRESHOLD && Math.abs(y - this._drag.grabY) < DRAG_THRESHOLD)
+          return Clutter.EVENT_STOP;
+        this._beginDrag(this._drag);
       }
       this._moveGhost(x, y);
       this._updateGap();
@@ -271,20 +252,12 @@ export class QuickSettingsLayoutEditor {
   }
 
   private _beginDrag(drag: DragState) {
-    drag.holdTimeoutId = 0;
     drag.active = true;
     drag.originIndex = this._visibleTiles().findIndex(candidate => candidate.key === drag.tile.key);
     drag.gapIndex = drag.originIndex;
     this._selectedKey = drag.tile.key;
     this._startGhost(drag.actor);
     this._moveGhost(drag.grabX, drag.grabY);
-    try { (drag.actor as any).ease({ scale_x: 0.96, scale_y: 0.96, duration: 100, mode: Clutter.AnimationMode.EASE_OUT_QUAD }); } catch (e) {}
-  }
-
-  private _cancelPendingHold() {
-    if (!this._drag?.holdTimeoutId) return;
-    try { GLib.Source.remove(this._drag.holdTimeoutId); } catch (e) {}
-    this._drag.holdTimeoutId = 0;
   }
 
   private _setMode(tile: EditorTile, mode: TileMode) { if (tile.slider && mode === 'circle') return; tile.mode = mode; this._rebuild(); }
@@ -351,7 +324,6 @@ export class QuickSettingsLayoutEditor {
   private _endDrag() {
     if (this._drag) {
       try {
-        this._cancelPendingHold();
         this._drag.actor.opacity = 255;
         this._drag.actor.scale_x = 1;
         this._drag.actor.scale_y = 1;
