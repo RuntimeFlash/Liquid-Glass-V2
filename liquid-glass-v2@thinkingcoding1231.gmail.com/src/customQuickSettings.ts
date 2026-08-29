@@ -190,7 +190,8 @@ export class CustomQuickSettingsRenderer {
       if (hidden.has(item.key)) {
         continue;
       }
-      let span = Math.min(item.span, 2);
+      // Sliders need the complete four-column row to remain usable.
+      let span = control.kind === 'slider' ? 4 : Math.min(item.span, 2);
       if (column + span > 4) {
         column = 0;
         row++;
@@ -229,7 +230,7 @@ export class CustomQuickSettingsRenderer {
   }
 
   private _defaultSpan(control: Control): number {
-    return control.kind === 'wide' || control.kind === 'slider' ? 2 : 1;
+    return control.kind === 'slider' ? 4 : control.kind === 'wide' ? 2 : 1;
   }
 
   private _savedLayout(): SavedLayout | null {
@@ -244,13 +245,13 @@ export class CustomQuickSettingsRenderer {
         items: parsed.items
           .filter((it: any) => it && typeof it.key === 'string')
           .map((it: any) => {
-            let span = it.span === 2 ? 2 : 1;
+            let span = it.span === 4 ? 4 : it.span === 2 ? 2 : 1;
             return {
               // v2 used `wifi`; network state now has one permanent key for
               // both Wi-Fi and Ethernet so a cable can never add a new tile.
               key: it.key === 'wifi' ? 'network' : it.key,
               span,
-              mode: span === 2 ? 'wide' : 'circle',
+              mode: span > 1 ? 'wide' : 'circle',
             };
           }),
         hidden: Array.isArray(parsed.hidden)
@@ -298,12 +299,35 @@ export class CustomQuickSettingsRenderer {
           if (this.nativeGrid)
             fresh = this._discoverControls();
         } catch (e) {}
+        this._addMovedSlidersToControls(fresh);
         this._openLayoutEditor(fresh);
       } catch (e) {
         try { console.log(`[Liquid Glass] edit controls failed: ${e}`); } catch (e2) { }
       }
     });
     return button;
+  }
+
+  /**
+   * Visible fallback sliders are temporarily parented under our custom root,
+   * not the native grid. Include them explicitly when opening the editor so
+   * volume/brightness can always be positioned or hidden again.
+   */
+  private _addMovedSlidersToControls(controls: Map<string, Control>) {
+    for (const { actor } of this.movedSliders) {
+      const key = this._sliderKeyFor(actor);
+      if (!key || controls.has(key)) continue;
+      const title = `${this._labels(actor).join(' ')}`;
+      controls.set(key, {
+        key,
+        source: actor,
+        title: title ? title.charAt(0).toUpperCase() + title.slice(1)
+          : key === 'volume' ? 'Volume' : key === 'brightness' ? 'Brightness' : 'Slider',
+        iconName: this._icon(actor) || this._fallbackIcon(key),
+        kind: 'slider',
+        squircle: false,
+      });
+    }
   }
 
   private _editorTiles(controls: Map<string, Control>): EditorTile[] {

@@ -107,7 +107,7 @@ export class QuickSettingsLayoutEditor {
   }
 
   private _visibleTiles() { return this._tiles.filter(tile => !tile.hidden); }
-  private _spanFor(tile: EditorTile) { return tile.mode === 'wide' ? 2 : 1; }
+  private _spanFor(tile: EditorTile) { return tile.slider ? 4 : tile.mode === 'wide' ? 2 : 1; }
   private _selectedTile() { return this._tiles.find(tile => tile.key === this._selectedKey) ?? null; }
 
   private _actionButton(label: string, styleClass: string, callback: () => void, reactive = true) {
@@ -141,6 +141,9 @@ export class QuickSettingsLayoutEditor {
     const hiddenTiles = this._tiles.filter(tile => tile.hidden);
     const tray = this._trayInner.get_parent?.();
     if (tray) tray.visible = hiddenTiles.length > 0;
+    // FlowLayout does not request height from its children in this shell
+    // version, so reserve a row whenever a hidden control exists.
+    this._trayInner.set_height(hiddenTiles.length > 0 ? 68 : 0);
     for (const tile of hiddenTiles) {
       const actor = this._makeTile(tile, true);
       this._actors.set(tile.key, actor);
