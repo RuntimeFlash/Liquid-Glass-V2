@@ -1,7 +1,7 @@
 // src/backdropBlur.ts
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
-import Gio from 'gi://Gio';
+import { BACKDROP_BLUR_FRAGMENT_SHADER } from './shaderSources.js';
 
 interface BackdropBlurEffectParams {
   extensionPath?: string;
@@ -16,17 +16,14 @@ interface BackdropBlurEffectParams {
 export const BackdropBlurEffect = GObject.registerClass({
   GTypeName: 'LiquidGlassBackdropBlurEffect',
 }, class BackdropBlurEffect extends Clutter.ShaderEffect {
-  private _extensionPath!: string;
-
   _init(params: BackdropBlurEffectParams) {
-    const extensionPath = params.extensionPath;
-
     delete params.extensionPath;
 
     super._init(params);
 
-    this._extensionPath = extensionPath!;
-    this._loadShader();
+    // See build-shaders.mjs: this is embedded at build time so creating a
+    // Quick Settings overlay never performs synchronous filesystem I/O.
+    this.set_shader_source(BACKDROP_BLUR_FRAGMENT_SHADER);
 
     // Initialize shader uniform variables with sane fallbacks. Resolution must
     // be non-zero: with 0x0 the rounded-rect SDF evaluates to alpha 0 over the
@@ -62,18 +59,5 @@ export const BackdropBlurEffect = GObject.registerClass({
     this._setFloat('feather_px', feather);
   }
 
-  // Loads the GLSL fragment shader file from the disk.
-  _loadShader() {
-    let shaderPath = this._extensionPath + '/shaders/backdropBlur.frag';
-    let file = Gio.File.new_for_path(shaderPath);
-    let [success, contents] = file.load_contents(null);
-
-    if (success) {
-      let shaderCode = new TextDecoder('utf-8').decode(contents);
-      this.set_shader_source(shaderCode);
-    } else {
-      console.error('[Liquid Glass] Failed to load backdropBlur shader!');
-    }
-  }
 });
 export type BackdropBlurEffect = InstanceType<typeof BackdropBlurEffect>;

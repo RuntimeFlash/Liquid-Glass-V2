@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc",
-    "watch": "tsc -w"
+    "build": "node scripts/build-shaders.mjs && tsc",
+    "watch": "node scripts/build-shaders.mjs && tsc -w"
   },
   "devDependencies": {
     "@girs/gnome-shell": "^50.0.0",

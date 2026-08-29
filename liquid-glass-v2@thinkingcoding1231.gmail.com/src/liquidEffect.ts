@@ -2,6 +2,7 @@
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
+import { GLASS_FRAGMENT_SHADER } from './shaderSources.js';
 
 interface LiquidEffectParams {
   extensionPath?: string;
@@ -13,11 +14,9 @@ interface LiquidEffectParams {
 export const LiquidEffect = GObject.registerClass({
   GTypeName: 'LiquidGlassEffect',
 }, class LiquidEffect extends Clutter.ShaderEffect {
-  private _extensionPath!: string | undefined;
   private _settings!: Gio.Settings | undefined;
   private _settingsIds!: number[];
   _init(params: LiquidEffectParams) {
-    const extensionPath = params.extensionPath;
     const settings = params.settings;
 
     delete params.extensionPath;
@@ -25,12 +24,12 @@ export const LiquidEffect = GObject.registerClass({
 
     super._init(params);
 
-    this._extensionPath = extensionPath;
     this._settings = settings;
 
-    console.log(`[Liquid Glass] Initing LiquidEffect. path: ${this._extensionPath}`);
-
-    this._loadShader();
+    // GLSL is compiled into shaderSources.ts during the build. Loading it from
+    // memory avoids a synchronous Gio file read for every card/menu effect and
+    // keeps an installed extension working if its source shader files vanish.
+    this.set_shader_source(GLASS_FRAGMENT_SHADER);
 
     // Initialize shader uniform variables.
     // These serve as default fallbacks until real values are supplied.
@@ -140,20 +139,6 @@ export const LiquidEffect = GObject.registerClass({
     this._setFloat('displacement_scale', settings.get_double('glass-displacement-scale') * scale);
     this._setFloat('max_z', settings.get_double('glass-max-z') * scale);
     this._setFloat('chroma_strength', settings.get_double('glass-chroma-strength') * scale); // 色収差もスケールに合わせる
-  }
-
-  // Loads the GLSL fragment shader file from the disk.
-  _loadShader() {
-    let shaderPath = this._extensionPath + '/shaders/glass.frag';
-    let file = Gio.File.new_for_path(shaderPath);
-    let [success, contents] = file.load_contents(null);
-
-    if (success) {
-      let shaderCode = new TextDecoder('utf-8').decode(contents);
-      this.set_shader_source(shaderCode);
-    } else {
-      console.error('[Liquid Glass] Failed to load shader!');
-    }
   }
 
   // Synchronizes the exact actor dimensions with the shader's internal canvas.
