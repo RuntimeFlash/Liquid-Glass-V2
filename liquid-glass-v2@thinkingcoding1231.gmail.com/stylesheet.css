@@ -943,8 +943,11 @@
 
 .liquid-glass-editor-selection-bar {
     spacing: 8px !important;
-    padding: 10px 0 0 !important;
+    padding: 8px 10px !important;
+    margin-top: 8px !important;
     min-height: 34px !important;
+    border-radius: 18px !important;
+    background-color: rgba(255, 255, 255, 0.08) !important;
 }
 
 .liquid-glass-editor-selection-title {
@@ -1031,7 +1034,7 @@
 }
 
 .liquid-glass-editor-tray-inner {
-    min-height: 70px !important;
+    min-height: 0 !important;
 }
 
 .liquid-glass-editor-tray-highlight {

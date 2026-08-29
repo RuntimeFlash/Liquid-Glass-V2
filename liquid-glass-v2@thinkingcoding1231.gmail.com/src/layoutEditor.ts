@@ -58,7 +58,7 @@ export class QuickSettingsLayoutEditor {
     const content = new St.BoxLayout({ vertical: true, style_class: 'liquid-glass-editor-content', x_expand: true });
     content.add_child(new St.Label({ text: 'Edit Controls', style_class: 'liquid-glass-editor-title', x_align: Clutter.ActorAlign.CENTER }));
     content.add_child(new St.Label({
-      text: 'Select a control to resize or hide it · Drag the handle to reorder',
+      text: 'Select a control to resize or hide it · Drag a control to reorder',
       style_class: 'liquid-glass-editor-hint', x_align: Clutter.ActorAlign.CENTER,
     }));
 
@@ -132,8 +132,16 @@ export class QuickSettingsLayoutEditor {
       column += span;
       if (column >= 4) { column = 0; row++; }
     }
+    // GridLayout can under-report its natural height when the last row is all
+    // compact tiles. Reserve each row explicitly so the selection controls
+    // never overlap the final row of cards.
+    const gridRows = row + (column > 0 ? 1 : 0);
+    this._gridWidget.set_height(Math.max(68, gridRows * 78));
     layout.attach(new St.Bin({ width: 0, height: 0, opacity: 0 }), 0, row + 1, 4, 1);
-    for (const tile of this._tiles.filter(tile => tile.hidden)) {
+    const hiddenTiles = this._tiles.filter(tile => tile.hidden);
+    const tray = this._trayInner.get_parent?.();
+    if (tray) tray.visible = hiddenTiles.length > 0;
+    for (const tile of hiddenTiles) {
       const actor = this._makeTile(tile, true);
       this._actors.set(tile.key, actor);
       this._trayInner.add_child(actor);
@@ -194,23 +202,19 @@ export class QuickSettingsLayoutEditor {
       content.x_align = Clutter.ActorAlign.CENTER;
       content.x_expand = false;
     }
-    if (!hidden) {
-      const handle = new St.Button({ label: '⠿', style_class: 'liquid-glass-editor-drag-handle', reactive: true, can_focus: false });
-      this._bindDrag(handle, button, tile);
-      content.add_child(handle);
-    }
     button.set_child(content);
-    button.connect('clicked', () => { this._selectedKey = tile.key; this._rebuild(); });
+    this._bindDrag(button, button, tile, hidden);
     return button;
   }
 
-  private _bindDrag(handle: St.Button, actor: St.Button, tile: EditorTile) {
-    handle.connect('button-press-event', () => {
+  private _bindDrag(target: St.Button, actor: St.Button, tile: EditorTile, hidden: boolean) {
+    target.connect('button-press-event', () => {
+      if (hidden) return Clutter.EVENT_PROPAGATE;
       const [x, y] = global.get_pointer();
       this._drag = { tile, actor, grabX: x, grabY: y, active: false, originIndex: -1, gapIndex: -1 };
       return Clutter.EVENT_STOP;
     });
-    handle.connect('motion-event', () => {
+    target.connect('motion-event', () => {
       if (!this._drag || this._drag.actor !== actor) return Clutter.EVENT_PROPAGATE;
       const [x, y] = global.get_pointer();
       if (!this._drag.active) {
@@ -224,15 +228,17 @@ export class QuickSettingsLayoutEditor {
       this._updateGap();
       return Clutter.EVENT_STOP;
     });
-    handle.connect('button-release-event', () => {
+    target.connect('button-release-event', () => {
       if (!this._drag || this._drag.actor !== actor) return Clutter.EVENT_PROPAGATE;
       const active = this._drag.active;
       const drop = active ? this._ghostCenter() : null;
       const origin = this._drag.originIndex;
       this._endDrag();
       if (active && drop) this._finishDrop(tile, drop[0], drop[1], origin);
+      else { this._selectedKey = tile.key; this._rebuild(); }
       return Clutter.EVENT_STOP;
     });
+    if (hidden) target.connect('clicked', () => { this._selectedKey = tile.key; this._rebuild(); });
   }
 
   private _setMode(tile: EditorTile, mode: TileMode) { if (tile.slider && mode === 'circle') return; tile.mode = mode; this._rebuild(); }
@@ -244,11 +250,22 @@ export class QuickSettingsLayoutEditor {
     if (!center) return;
     const others = this._visibleTiles().filter(tile => tile.key !== this._drag!.tile.key);
     let gap = others.length;
+    let best: { index: number; rect: any; distance: number } | null = null;
     for (let index = 0; index < others.length; index++) {
       const actor = this._actors.get(others[index].key);
       if (!actor) continue;
       const rect = this._rect(actor);
-      if (this._contains(rect, center[0], center[1])) { gap = center[0] < rect.x + rect.w / 2 ? index : index + 1; break; }
+      // A row change is more meaningful than a small horizontal difference;
+      // this makes blank cell drops behave like Android's launcher grid.
+      const dx = center[0] - (rect.x + rect.w / 2);
+      const dy = center[1] - (rect.y + rect.h / 2);
+      const distance = Math.abs(dx) + Math.abs(dy) * 1.35;
+      if (!best || distance < best.distance) best = { index, rect, distance };
+    }
+    if (best) {
+      const isBelow = center[1] > best.rect.y + best.rect.h * 0.72;
+      const isRight = center[0] >= best.rect.x + best.rect.w / 2;
+      gap = best.index + (isBelow || isRight ? 1 : 0);
     }
     if (gap === this._drag.gapIndex) return;
     this._drag.gapIndex = gap;

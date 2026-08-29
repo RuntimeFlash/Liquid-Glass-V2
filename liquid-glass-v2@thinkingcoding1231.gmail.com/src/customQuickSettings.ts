@@ -220,6 +220,11 @@ export class CustomQuickSettingsRenderer {
       }
     }
 
+    // Keep any slider GNOME did not expose as a layout item visible below the
+    // grid. This also preserves volume/brightness while a native grid rebuild
+    // is settling.
+    this._moveSliders();
+
     this.root.add_child(this._createEditControlsButton(controls));
   }
 
@@ -715,6 +720,9 @@ export class CustomQuickSettingsRenderer {
   }
 
   private _subtitle(source: any, key?: string) {
+    if (key === 'network')
+      return this._isChecked(source, key) ? 'Connected' : 'Off';
+
     // Bluetooth's native labels and checked state can lag behind the actual
     // controller. Read the controller first so its tint and subtitle agree.
     if (key === 'bluetooth') {
@@ -793,6 +801,20 @@ export class CustomQuickSettingsRenderer {
       // Do not fall back to the native tile: its checked flag is known to be
       // stale for Bluetooth. If the controller exists, it is authoritative.
       if (client) return client.active === true;
+    }
+    if (key === 'network') {
+      // The checked state is often held by a nested quick-toggle rather than
+      // the menu-button wrapper used as our activation source.
+      let checked = false;
+      let visit = (actor: any) => {
+        if (!actor || checked) return;
+        try {
+          checked = actor.checked === true || actor.get_checked?.() === true || actor.has_style_pseudo_class?.('checked') === true;
+        } catch (e) {}
+        for (let child of actor.get_children?.() || []) visit(child);
+      };
+      visit(source);
+      return checked;
     }
     try { return source.checked === true || source.get_checked?.() === true || source.has_style_pseudo_class?.('checked'); } catch (e) { return false; }
   }
