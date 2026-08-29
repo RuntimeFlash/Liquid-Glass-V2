@@ -158,6 +158,23 @@ export class QuickSettingsLayoutEditor {
     }
   }
 
+  /** Reposition existing tile actors during drag without dropping their grab. */
+  private _relayoutGrid() {
+    if (!this._gridWidget) return;
+    const layout = this._gridWidget.layout_manager as Clutter.GridLayout;
+    let row = 0; let column = 0;
+    for (const tile of this._visibleTiles()) {
+      const span = this._spanFor(tile);
+      if (column + span > 4) { column = 0; row++; }
+      const actor = this._actors.get(tile.key);
+      if (actor) {
+        try { layout.attach(actor, column, row, span, 1); } catch (e) {}
+      }
+      column += span;
+      if (column >= 4) { column = 0; row++; }
+    }
+  }
+
   private _makeTile(tile: EditorTile, hidden: boolean): St.Button {
     const isCompact = hidden || tile.mode === 'circle';
     let style = hidden ? 'liquid-glass-editor-tile liquid-glass-editor-tile-hidden' :
@@ -239,7 +256,7 @@ export class QuickSettingsLayoutEditor {
     const ordered = [...others.slice(0, gap), dragged, ...others.slice(gap)];
     let index = 0;
     this._tiles = this._tiles.map(tile => tile.hidden ? tile : ordered[index++]);
-    this._rebuild();
+    this._relayoutGrid();
   }
 
   private _finishDrop(tile: EditorTile, x: number, y: number, origin: number) {
