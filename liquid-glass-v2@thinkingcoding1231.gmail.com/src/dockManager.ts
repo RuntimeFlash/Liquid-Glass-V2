@@ -7,7 +7,10 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import { LiquidEffect } from './liquidEffect.js';
 import Gio from 'gi://Gio';
+import Cogl from 'gi://Cogl';
+import GdkPixbuf from 'gi://GdkPixbuf';
 import { UnpickableClone, UnpickableActor } from './utils.js';
+import { WallpaperCache } from './wallpaperCache.js';
 
 // Padding to allow the shader to draw effects (like refraction and blur) outside the actor's strict bounds.
 const SHADER_PADDING = 20;
@@ -36,6 +39,7 @@ export class DashManager {
   private _glassExpand: number;
 
   private bgClone: Clutter.Clone | null = null;
+  private wallpaperClone: Clutter.Clone | null = null;
   private windowClonesContainer: Clutter.Actor | null = null;
   private _windowClones: Map<Clutter.Actor, Clutter.Clone>;
 
@@ -71,20 +75,35 @@ export class DashManager {
 
   private _marginValue: number = 0;
 
+  // Overview mode tracking: when in overview, the dock is rendered
+  // strictly with the desktop wallpaper and 60Hz frame syncing is stopped.
+  private _inOverview: boolean = false;
+
+  // Linger fix: dock auto-hide (fullscreen) can animate an ancestor, not
+  // targetActor itself. We track ancestor opacity/visibility to hide the
+  // glass promptly.
+  private _dockVisibilitySignals: number[] = [];
+  private _dockVisibilityActors: Map<number, Clutter.Actor> = new Map();
+
+  // Injected by extension.js; see constructor comment.
+  private _wallpaperCache: WallpaperCache | null = null;
+
   // コンストラクタに settings を追加
-  constructor(extensionPath: string, targetActor: St.Widget, settings: Gio.Settings) {
+  // wallpaperCache is injected by extension.js so both sides share one instance.
+  // A relative import here resolves without the extension's `?v=` cache-buster,
+  // which can yield a second, stale copy of the module in the same session.
+  constructor(
+    extensionPath: string,
+    targetActor: St.Widget,
+    settings: Gio.Settings,
+    wallpaperCache: WallpaperCache | null = null,
+  ) {
     this.extensionPath = extensionPath;
     this.targetActor = targetActor;
     this._settings = settings; // GSettings object
-
-    // this.bgActor = null;
-    // this.blurEffect = null;
-    // this.effect = null;
+    this._wallpaperCache = wallpaperCache;
 
     this._glassExpand = 0; // ガラスエリアの拡張量（ピクセル）
-
-    // this.bgClone = null;
-    // this.windowClonesContainer = null;
 
     this._windowClones = new Map();
 
@@ -129,6 +148,7 @@ export class DashManager {
     connectSetting('dock-glass-expand', () => {
       if (this.effect && this._isEffectActive) {
         this._glassExpand = this._settings.get_int('dock-glass-expand');
+        this._syncGeometry();
       }
     });
 
@@ -136,6 +156,7 @@ export class DashManager {
     connectSetting('dock-margin-bottom', () => {
       if (this._isEffectActive) this._applyMargin();
       this._marginValue = this._settings.get_int('dock-margin-bottom') || 0;
+      if (this._isEffectActive) this._syncGeometry();
     });
 
     // シェーダーパラメータの動的変更
@@ -281,6 +302,31 @@ export class DashManager {
 
     this.bgActor.hide();
 
+    // Eagerly build the static wallpaper clone (Clutter.Image texture — paints offstage)
+    // so it exists before any Overview signal fires. This fixes the black where
+    // overview opened before desktop frame-sync ever ran and wallpaperClone was null.
+    let ensureWallpaperClone = () => {
+      if (this.wallpaperClone) return;
+      try {
+        const monitorIndex = Main.layoutManager.findIndexForActor(this.targetActor);
+        const mi = monitorIndex >= 0 ? monitorIndex : (Main.layoutManager.primaryIndex ?? 0);
+        const cache = this._wallpaperCache ?? WallpaperCache.getDefault();
+        const source = cache.getWallpaperActorForMonitor(mi);
+        if (source) {
+          this.wallpaperClone = new UnpickableClone({ source });
+          this.fboContainer?.add_child(this.wallpaperClone);
+          this.wallpaperClone.visible = false;
+          this.wallpaperClone.hide();
+        } else {
+          console.log(`[Liquid Glass] ensureWallpaperClone: no source for monitor ${mi}`);
+        }
+      } catch (e) {
+        console.log(`[Liquid Glass] Wallpaper clone creation failed: ${e}`);
+      }
+    };
+    // Build immediately so Overview has a valid texture even before first frameTick
+    try { ensureWallpaperClone(); } catch (e) {}
+
     let buildClones = () => {
       if (!this.bgActor) return;
 
@@ -292,6 +338,9 @@ export class DashManager {
         this.bgClone = new UnpickableClone({ source: Main.layoutManager._backgroundGroup });
         this.fboContainer?.add_child(this.bgClone);
       }
+
+      // Static wallpaper (texture-backed Clutter.Image) — ensure exists
+      ensureWallpaperClone();
 
       if (!this.windowClonesContainer) {
         this.windowClonesContainer = new UnpickableActor();
@@ -307,6 +356,14 @@ export class DashManager {
     const idleSyncIntervalUs = 250_000;
 
     let frameTick = () => {
+      // If overview is active, stop the frame sync immediately.
+      // Overview uses a static wallpaper backdrop with zero 60Hz polling.
+      if (this._inOverview) {
+        this._destroyWindowClones();
+        this._frameSyncId = 0;
+        return GLib.SOURCE_REMOVE;
+      }
+
       if (!this.bgActor || !this.targetActor.mapped) {
         if (this.bgActor) {
           this.bgActor.opacity = 0;
@@ -316,10 +373,11 @@ export class DashManager {
         return GLib.SOURCE_REMOVE;
       }
 
-      // Overview keeps a wallpaper-only backdrop. Live clone synchronization
-      // here competes with Dash to Dock and Overview animation every frame.
-      if (this._isOverviewActive()) {
-        this._destroyWindowClones();
+      if (!this._isDockEffectivelyVisible()) {
+        if (this.bgActor) {
+          this.bgActor.opacity = 0;
+          this.bgActor.hide();
+        }
         this._frameSyncId = 0;
         return GLib.SOURCE_REMOVE;
       }
@@ -344,8 +402,7 @@ export class DashManager {
           oldBgX !== this._lastBgX ||
           oldBgY !== this._lastBgY;
 
-        let overviewActive = Main.overview.visible || Main.overview.animationInProgress;
-        if (geometryChanged || overviewActive) {
+        if (geometryChanged) {
           stableFrameCount = 0;
           idleSyncMode = false;
         } else {
@@ -362,17 +419,20 @@ export class DashManager {
     };
 
     let startFrameSync = () => {
+      if (this._inOverview) {
+        this._stopFrameSync();
+        this._destroyWindowClones();
+        this._syncGeometry();
+        return;
+      }
+
       idleSyncMode = false;
       stableFrameCount = 0;
       lastSyncTime = 0;
 
-      if (this._frameSyncId === 0 && this.targetActor.mapped) {
+      if (this._frameSyncId === 0 && this._isDockEffectivelyVisible()) {
         this._syncGeometry();
         buildClones();
-        if (this._isOverviewActive()) {
-          this._destroyWindowClones();
-          return;
-        }
         this._frameSyncId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, frameTick);
       }
     };
@@ -409,7 +469,11 @@ export class DashManager {
         try {
           let signalId = actor.connect(signalName, () => {
             if (this._isEffectActive) {
-              startFrameSync();
+              if (this._inOverview) {
+                this._syncGeometry();
+              } else {
+                startFrameSync();
+              }
             }
           });
           ids.push(signalId);
@@ -417,10 +481,19 @@ export class DashManager {
           this._signalActors.set(signalId, actor);
         } catch (e) {}
       }
-      // Also try to connect to slide-x/y (for standard Dash to Dock)
       try {
-        let sig1 = actor.connect('notify::slide-x', () => { if (this._isEffectActive) startFrameSync(); });
-        let sig2 = actor.connect('notify::slide-y', () => { if (this._isEffectActive) startFrameSync(); });
+        let sig1 = actor.connect('notify::slide-x', () => {
+          if (this._isEffectActive) {
+            if (this._inOverview) this._syncGeometry();
+            else startFrameSync();
+          }
+        });
+        let sig2 = actor.connect('notify::slide-y', () => {
+          if (this._isEffectActive) {
+            if (this._inOverview) this._syncGeometry();
+            else startFrameSync();
+          }
+        });
         ids.push(sig1, sig2);
         this._signals.push(sig1, sig2);
         this._signalActors.set(sig1, actor);
@@ -452,10 +525,6 @@ export class DashManager {
           connectActorSignals(gc);
         }
       }
-
-      // Some dash implementations do not expose actor-added/actor-removed.
-      // The existing notify signals on the dock and its current children cover
-      // geometry updates without relying on implementation-specific signals.
     };
 
     connectActorSignals(this.targetActor);
@@ -466,25 +535,94 @@ export class DashManager {
       connectChildrenRecursively(animatedActor);
     }
 
-    // Switch modes on Overview lifecycle signals instead of keeping a 60 Hz
-    // source running just to notice that Overview has appeared or closed.
+    let connectDockVisibilityChain = () => {
+      let cur: any = this.targetActor?.get_parent?.() ?? null;
+      let seen = new Set<Clutter.Actor>();
+      while (cur && cur !== Main.layoutManager.uiGroup && !seen.has(cur)) {
+        seen.add(cur);
+        try {
+          for (let sig of ['notify::visible', 'notify::mapped', 'notify::opacity', 'notify::translation-x', 'notify::translation-y'] as any) {
+            let id = cur.connect(sig, () => {
+              if (this._inOverview) {
+                // In overview, update geometry directly without starting 60Hz loop
+                this._syncGeometry();
+                return;
+              }
+              if (!this._isDockEffectivelyVisible()) {
+                try { this.bgActor?.hide(); } catch (e) {}
+              }
+              if (this._isEffectActive) startFrameSync();
+            });
+            this._dockVisibilitySignals.push(id);
+            this._dockVisibilityActors.set(id, cur);
+          }
+        } catch (e) {}
+        try { cur = cur.get_parent?.() ?? null; } catch (e) { break; }
+      }
+    };
+    try { connectDockVisibilityChain(); } catch (e) {}
+
     this._overviewSignalIds.push(Main.overview.connect('showing', () => {
+      this._inOverview = true;
       this._stopFrameSync();
       this._destroyWindowClones();
+      if (this.windowClonesContainer) {
+        this.windowClonesContainer.visible = false;
+        this.windowClonesContainer.hide();
+      }
+      // Ensure FBO clones exist before syncing geometry — fixes black when
+      // overview opens before desktop frame-sync ever built the clones.
+      buildClones();
       this._syncGeometry();
     }));
+
+    this._overviewSignalIds.push(Main.overview.connect('shown', () => {
+      this._inOverview = true;
+      this._stopFrameSync();
+      this._destroyWindowClones();
+      if (this.windowClonesContainer) {
+        this.windowClonesContainer.visible = false;
+        this.windowClonesContainer.hide();
+      }
+      buildClones();
+      this._syncGeometry();
+    }));
+
     this._overviewSignalIds.push(Main.overview.connect('hidden', () => {
-      if (this._isEffectActive) startFrameSync();
+      this._inOverview = false;
+      this._destroyWindowClones();
+      if (this.bgActor && this._isDockEffectivelyVisible()) {
+        try {
+          if (this.windowClonesContainer) {
+            this.windowClonesContainer.visible = true;
+            this.windowClonesContainer.show();
+          }
+          this.bgActor.show();
+          this._syncGeometry();
+          startFrameSync();
+        } catch (e) {}
+      } else if (this.bgActor) {
+        try {
+          this.bgActor.opacity = 0;
+          this.bgActor.hide();
+        } catch (e) {}
+        this._stopFrameSync();
+      }
     }));
 
     startFrameSync();
   }
 
   _syncGeometry() {
-    if (!this.bgActor || !this.targetActor || !this.targetActor.mapped) {
+    if (!this.bgActor || !this.targetActor) {
       if (this.bgActor && this.bgActor.visible) {
-        this.bgActor.opacity = 0;
-        this.bgActor.hide();
+        try { this.bgActor.hide(); } catch (e) {}
+      }
+      return;
+    }
+    if (!this._inOverview && !this._isDockEffectivelyVisible()) {
+      if (this.bgActor.visible) {
+        try { this.bgActor.hide(); } catch (e) {}
       }
       return;
     }
@@ -566,13 +704,7 @@ export class DashManager {
       sourceActor = dashBg;
     }
 
-
     // 1. まず元の背景のサイズと位置を取得
-    // Dash-to-Dock's `dash-background` is not the dock's complete visual
-    // footprint: in particular, the Show Apps control and its end padding can
-    // sit outside it.  Always collect the visible content from the outer dock
-    // as well, then merge it with the background below.  This stays correct
-    // when Dash-to-Dock redisplays, when Kiwi adds an item, and in shrink mode.
     let contentBounds = getVisibleContentBounds(this.targetActor);
     let baseW: number;
     let baseH: number;
@@ -601,7 +733,6 @@ export class DashManager {
     if (Number.isNaN(absX) || Number.isNaN(absY)) return;
     if (this._outputLogs) log(`[Raw] ${absX}, ${absY}, ${baseW}, ${baseH}`);
 
-
     let monitorIndex = Main.layoutManager.findIndexForActor(this.targetActor);
     if (monitorIndex < 0) {
       monitorIndex = Main.layoutManager.primaryIndex;
@@ -628,14 +759,10 @@ export class DashManager {
       let isHorizontalDock = (minCenterDist === distTopCenter || minCenterDist === distBottomCenter);
 
       if (isHorizontalDock) {
-        // ▼ 上・下ドックの場合：異常に膨張するのは H（厚み）
-        // Hの変化量が「ちょうど marginValue 分」だった場合のみ、そのジャンプを無効化（<= 1 に修正）
         if (Math.abs(Math.abs(baseH - this._lastBaseH) - this._marginValue) <= 1) {
           baseH = this._lastBaseH;
         }
       } else {
-        // ▼ 左・右ドックの場合：異常に膨張するのは W（厚み）
-        // Wの変化量が「ちょうど marginValue 分」だった場合のみ無効化
         if (Math.abs(Math.abs(baseW - this._lastBaseW) - this._marginValue) <= 1) {
           baseW = this._lastBaseW;
         }
@@ -650,15 +777,11 @@ export class DashManager {
       if (this._outputLogs) log(`refActor [Raw]: ${refX}, ${refY}, ${refW}, ${refH}`);
 
       if (!Number.isNaN(refX) && !Number.isNaN(refY) && refW > 0 && refH > 0) {
-
         let topGap = refY - absY;
         let bottomGap = (absY + baseH) - (refY + refH);
 
-        // For when the dock is upside down
         if (topGap < 0 || bottomGap < 0) {
-          // 原点が下端にあるため、真の左上Y座標は refY - refH になる
           let trueRefY = refY - refH;
-          // ギャップを再計算して正常化
           topGap = trueRefY - absY;
           bottomGap = (absY + baseH) - (trueRefY + refH);
         }
@@ -666,7 +789,6 @@ export class DashManager {
         let leftGap = refX - absX;
         let rightGap = (absX + baseW) - (refX + refW);
 
-        // ▼ X軸が反転（左右ミラー）しているかの検知と補正（左/右ドック用）
         if (leftGap < 0 || rightGap < 0) {
           let trueRefX = refX - refW;
           leftGap = trueRefX - absX;
@@ -674,34 +796,23 @@ export class DashManager {
         }
 
         if (baseW >= baseH) {
-          // ▼ 横長ドック（上・下ドック）▼
           let diff = Math.abs(bottomGap - topGap);
-
-          // 異常値(高さを超えるようなズレ)は無視する安全装置
           if (diff > 0 && diff < baseH / 2) {
             if (bottomGap > topGap) {
-              // 下の隙間の方が広い -> 下を削る
               baseH -= diff;
             } else {
-              // 上の隙間の方が広い -> 開始位置(上)を下げて、高さも削る
               absY += diff;
               baseH -= diff;
             }
           }
         } else {
-          // ▼ 縦長ドック（左・右ドック）▼
           let diff = Math.abs(rightGap - leftGap);
-
           if (diff > 0 && diff < baseW / 2) {
             if (minCenterDist === distLeftCenter) {
-              // 左ドック: 中央方向（右側）の余白のみ削る
-              // leftGap > rightGap になっても absX を右にズラしてはいけない
               if (rightGap > leftGap) {
                 baseW -= diff;
               }
-              // leftGap > rightGap の場合は何もしない（誤補正防止）
             } else {
-              // 右ドック: 中央方向（左側）の余白を削る
               if (rightGap > leftGap) {
                 baseW -= diff;
               } else {
@@ -714,12 +825,10 @@ export class DashManager {
       }
     }
     if (this._outputLogs) log(`[Gap] ${absX}, ${absY}, ${baseW}, ${baseH}`);
-    // --------------------------------------------------------------------
-    // --------------------------------------------------------------------
+
     let marginValue = this._settings.get_int('dock-margin-bottom') || 0;
 
     if (monitor && marginValue > 0) {
-      // アプリ起動時の微小揺れ（誤動作の元）を完全に無視するため、閾値を大きく設定
       this._lastAbsX = absX;
       this._lastAbsY = absY;
 
@@ -737,15 +846,13 @@ export class DashManager {
       let stableBaseH = tH + this._stableDeltaH;
 
       if (minCenterDist === distBottomCenter) {
-        // 下ドック
         let expectedBottom = monitor.y + monitor.height - marginValue;
         if (absY + baseH > expectedBottom) {
           let overflow = (absY + baseH) - expectedBottom;
           baseH -= overflow;
         }
-        if (baseH > stableBaseH) baseH = stableBaseH; // Experimental
+        if (baseH > stableBaseH) baseH = stableBaseH;
       } else if (minCenterDist === distTopCenter) {
-        // 上ドック
         let expectedTop = monitor.y + marginValue;
         if (absY < expectedTop) {
           let diff = expectedTop - absY;
@@ -754,15 +861,13 @@ export class DashManager {
         }
         if (baseH > stableBaseH) baseH = stableBaseH;
       } else if (minCenterDist === distRightCenter) {
-        // 右ドック
         let expectedRight = monitor.x + monitor.width - marginValue;
         if (absX + baseW > expectedRight) {
           let overflow = (absX + baseW) - expectedRight;
           baseW -= overflow;
         }
-        if (baseW > stableBaseW) baseW = stableBaseW; // Experimental
+        if (baseW > stableBaseW) baseW = stableBaseW;
       } else {
-        // 左ドック
         let expectedLeft = monitor.x + marginValue;
         if (absX < expectedLeft) {
           let diff = expectedLeft - absX;
@@ -773,9 +878,7 @@ export class DashManager {
       }
     }
     if (this._outputLogs) log(`[Final] ${absX}, ${absY}, ${baseW}, ${baseH}`);
-    // --------------------------------------------------------------------
 
-    // 補正されたサイズを適用
     let w = Math.max(1.0, baseW);
     let h = Math.max(1.0, baseH);
 
@@ -797,12 +900,12 @@ export class DashManager {
       if (absY + baseH > monitor.y + monitor.height) visibleH -= ((absY + baseH) - (monitor.y + monitor.height));
     }
 
-    if (visibleW <= 5 || visibleH <= 5 || this.targetActor.opacity === 0) {
+    if (!this._inOverview && (visibleW <= 5 || visibleH <= 5 || this.targetActor.opacity === 0)) {
       this.bgActor.opacity = 0;
       this.bgActor.hide();
       return;
     } else {
-      this.bgActor.opacity = this.targetActor.opacity;
+      this.bgActor.opacity = this.targetActor.opacity || 255;
       this.bgActor.show();
     }
 
@@ -818,11 +921,12 @@ export class DashManager {
       this.clipBox?.set_size(bgW, bgH);
       this.clipBox?.set_position(0, 0);
 
-      // We set size to half-resolution (bgW*0.5, bgH*0.5) and scale by 2.0 to downsample the blur pass.
       if (this.fboContainer) {
         this.fboContainer.set_position(0, 0);
         this.fboContainer.set_size(bgW * 0.5, bgH * 0.5);
         this.fboContainer.set_scale(2.0, 2.0);
+        this.fboContainer.visible = true;
+        this.fboContainer.show();
       }
 
       this.effect?.setResolution(bgW, bgH);
@@ -831,27 +935,57 @@ export class DashManager {
       this._lastBgX = bgX; this._lastBgY = bgY;
     }
 
+    // Wallpaper clone (Clutter.Image texture) — always keep positioned, and toggle
+    // visibility independently of bgClone so overview wallpaper shows even if bgClone
+    // was never built (e.g. dock was auto-hidden before overview opened).
+    if (this.wallpaperClone) {
+      // The cached wallpaper is monitor-local (origin at monitor.x/y). The
+      // clone lives in the half-scale FBO, so map screen coordinates to it:
+      // screenX = bgX + (cloneX * 2)  =>  cloneX = (monitor.x - bgX) * 0.5.
+      // For the primary monitor this reduces to -bgX * 0.5.
+      const wpx = monitor ? (monitor.x - bgX) * 0.5 : -bgX * 0.5;
+      const wpy = monitor ? (monitor.y - bgY) * 0.5 : -bgY * 0.5;
+      this.wallpaperClone.set_position(wpx, wpy);
+      this.wallpaperClone.set_scale(0.5, 0.5);
+      if (this._inOverview) {
+        this.wallpaperClone.visible = true;
+        this.wallpaperClone.show();
+      } else {
+        this.wallpaperClone.visible = false;
+        this.wallpaperClone.hide();
+      }
+    }
+
     if (this.bgClone && this.windowClonesContainer) {
-      // Position wallpaper clone and set scale to 0.5 to offset parent's 2.0 scale.
       this.bgClone.set_position(-bgX * 0.5, -bgY * 0.5);
       this.bgClone.set_scale(0.5, 0.5);
 
       this.windowClonesContainer.set_position(-bgX * 0.5, -bgY * 0.5);
       this.windowClonesContainer.set_scale(0.5, 0.5);
 
-      // アクティビティ画面が開いているか（アニメーション中含む）を判定
-      let isOverview = Main.overview.visible || Main.overview.animationInProgress;
+      if (this._inOverview) {
+        // OVERVIEW MODE: wallpaperClone is already visible above; hide live clones.
+        this.windowClonesContainer.visible = false;
+        this.windowClonesContainer.hide();
+        this._destroyWindowClones();
+        this.bgClone.visible = false;
+        this.bgClone.hide();
+        // If wallpaperClone failed to build, fall back to live bgClone (may be dimmed)
+        if (!this.wallpaperClone) {
+          this.bgClone.visible = true;
+          this.bgClone.show();
+        }
+      } else {
+        // DESKTOP MODE: live wallpaper + live window clones (normal glass)
+        this.bgClone.visible = true;
+        this.bgClone.show();
+        this.windowClonesContainer.visible = true;
+        this.windowClonesContainer.show();
 
-      let windows = global.get_window_actors();
-      let activeWindows = new Set();
-      let zIndex = 0;
+        let windows = global.get_window_actors();
+        let activeWindows = new Set();
+        let zIndex = 0;
 
-      if (!isOverview) {
-        // --- デスクトップ通常時 ---
-
-        this.bgClone.show(); // 通常の壁紙クローンを表示
-
-        // 既存のウィンドウクローン同期ロジック
         for (let w of windows) {
           let metaWindow = w.get_meta_window();
           if (!metaWindow || metaWindow.minimized || !w.visible) continue;
@@ -894,24 +1028,20 @@ export class DashManager {
           }
           zIndex++;
         }
-      } else {
-        // Overview is intentionally wallpaper-only. Cloning workspaces, the
-        // App Grid, or search doubles the compositor work during transitions.
-        this.bgClone.show();
-      }
 
-      // 使われなくなったクローン（閉じたウィンドウ、またはOverview起動時の全ウィンドウ）を削除
-      for (let [w, clone] of this._windowClones.entries()) {
-        if (!activeWindows.has(w)) {
-          clone.destroy();
-          this._windowClones.delete(w);
+        // 使われなくなったクローン（閉じたウィンドウ）を削除
+        for (let [w, clone] of this._windowClones.entries()) {
+          if (!activeWindows.has(w)) {
+            clone.destroy();
+            this._windowClones.delete(w);
+          }
         }
       }
     }
   }
 
   private _isOverviewActive() {
-    return Main.overview.visible || Main.overview.animationInProgress;
+    return this._inOverview || Main.overview.visible || Main.overview.animationInProgress;
   }
 
   private _destroyWindowClones() {
@@ -928,15 +1058,39 @@ export class DashManager {
     }
   }
 
+  private _isDockEffectivelyVisible(): boolean {
+    try {
+      if (!this.targetActor) return false;
+      if (this._inOverview) return true;
+      let cur: Clutter.Actor | null = this.targetActor as any;
+      while (cur && cur !== Main.layoutManager.uiGroup) {
+        try {
+          if (!(cur as any).visible || !(cur as any).mapped) return false;
+          if (typeof (cur as any).get_paint_opacity === 'function') {
+            if ((cur as any).get_paint_opacity() === 0) return false;
+          } else if ((cur as any).opacity === 0) {
+            return false;
+          }
+        } catch (e) {}
+        try { cur = cur.get_parent?.() ?? null; } catch (e) { break; }
+      }
+      try {
+        if (typeof (this.targetActor as any).get_paint_opacity === 'function') {
+          if ((this.targetActor as any).get_paint_opacity() === 0) return false;
+        }
+      } catch (e) {}
+      return true;
+    } catch (e) { return false; }
+  }
+
   // エフェクトを画面から消し、元に戻す処理
   _removeEffect() {
     if (!this._isEffectActive) return;
     this._isEffectActive = false;
 
+    this._inOverview = false;
     this._currentMarginStyle = undefined;
 
-    // Safely try to remove styles/signals. If targetActor is already destroyed, 
-    // this will fail safely without breaking the rest of the cleanup.
     try {
       for (let sigId of this._signals) {
         try { this._signalActors.get(sigId)?.disconnect(sigId); } catch (e) {}
@@ -954,34 +1108,17 @@ export class DashManager {
           children[i].visible = true;
         }
       }
-    } catch (e) {
-      // Actor was likely destroyed, safe to ignore
-    }
+    } catch (e) {}
 
     this._signals = [];
     this._signalActors.clear();
-
-    this.targetActor.remove_style_class_name('liquid-glass-transparent');
 
     try {
       if (this._dockParent) {
         this._dockParent.remove_style_class_name('liquid-glass-transparent');
       }
-    } catch (e) { }
+    } catch (e) {}
     this._dockParent = null;
-
-    if (this._originalStyle !== undefined) {
-      this.targetActor.set_style(this._originalStyle);
-      this._originalStyle = undefined; // 次回オンになった時に再取得できるようクリア
-    }
-
-    let children = this.targetActor.get_children() as St.Widget[];
-    for (let i = 0; i < children.length; i++) {
-      if (children[i].has_style_class_name('dash-background')) {
-        children[i].opacity = 255;
-        children[i].visible = true;
-      }
-    }
 
     this._stopFrameSync();
 
@@ -989,6 +1126,12 @@ export class DashManager {
       try { Main.overview.disconnect(signalId); } catch (e) {}
     }
     this._overviewSignalIds = [];
+
+    for (let id of this._dockVisibilitySignals) {
+      try { this._dockVisibilityActors.get(id)?.disconnect(id); } catch (e) {}
+    }
+    this._dockVisibilitySignals = [];
+    this._dockVisibilityActors.clear();
 
     this._destroyWindowClones();
 
@@ -1003,16 +1146,15 @@ export class DashManager {
     }
     this.blurEffect = null;
     this.bgClone = null;
+    this.wallpaperClone = null;
     this.fboContainer = null;
     this.windowClonesContainer = null;
   }
 
   // 拡張機能全体が無効化される時の最終クリーンアップ
   cleanup() {
-    // エフェクトを解除
     this._removeEffect();
 
-    // メモリリークを防ぐため、GSettingsのリスナーもすべて解除する
     if (this._settings) {
       for (let id of this._settingsSignals) {
         this._settings.disconnect(id);
@@ -1107,10 +1249,10 @@ export class DashManager {
     for (const child of children) {
       const found = this._findReferenceActor(child);
       if (found) {
-        return found; // 見つかったら即座に返す（無駄な探索をしない）
+        return found;
       }
     }
 
-    return null; // 見つからなかった場合
+    return null;
   }
 }

@@ -22,13 +22,25 @@ export default class LiquidGlassExtension extends Extension {
       { NotificationManager },
       { QuickSettingsManager },
       { OsdManager },
+      { WallpaperCache },
     ] = await Promise.all([
       import(`${distUri}/uiManager.js?v=${moduleVersion}`),
       import(`${distUri}/dockManager.js?v=${moduleVersion}`),
       import(`${distUri}/notificationManager.js?v=${moduleVersion}`),
       import(`${distUri}/quickSettingsManager.js?v=${moduleVersion}`),
       import(`${distUri}/osdManager.js?v=${moduleVersion}`),
+      import(`${distUri}/wallpaperCache.js?v=${moduleVersion}`),
     ]);
+
+    // Extract wallpaper at startup from empty workspace (last workspace) for dock overview mode.
+    // This cached wallpaper is used with normal blur/shader in overview while 60Hz polling is stopped.
+    try {
+      this._wallpaperCache = WallpaperCache.getDefault();
+      this._wallpaperCache.init();
+      console.log(`[Liquid Glass] Wallpaper cache initialized (empty workspace extraction)`);
+    } catch (e) {
+      console.log(`[Liquid Glass] Wallpaper cache init failed: ${e}`);
+    }
 
     if (!this._enabled) return;
 
@@ -167,8 +179,10 @@ export default class LiquidGlassExtension extends Extension {
     if (dashContainer) {
       console.log("[Liquid Glass] Found Dash to Dock container!");
 
-      // Initialize the dock manager and apply the liquid glass effect
-      this._dashManager = new this._DashManager(this.dir.get_path(), dashContainer, this._settings);
+      // Initialize the dock manager and apply the liquid glass effect.
+      // Pass the cache explicitly so the dock uses the same instance regardless
+      // of how nested module imports resolve.
+      this._dashManager = new this._DashManager(this.dir.get_path(), dashContainer, this._settings, this._wallpaperCache ?? null);
       this._dashManager.setup();
 
       this._dashDestroyId = dashContainer.connect('destroy', () => {
@@ -299,6 +313,11 @@ export default class LiquidGlassExtension extends Extension {
     if (this._osdManager) {
       this._osdManager.cleanup();
       this._osdManager = null;
+    }
+
+    if (this._wallpaperCache) {
+      try { this._wallpaperCache.destroy(); } catch (e) {}
+      this._wallpaperCache = null;
     }
   }
 }
