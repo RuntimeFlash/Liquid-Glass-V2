@@ -108,7 +108,7 @@ export default class LiquidGlassPreferences extends ExtensionPreferences {
     const quickSettingsStiffnessRow = this._addSpinRow(qsGroup, settings, 'quick-settings-spring-stiffness', 'Spring Stiffness', 'Spring stiffness', 0.0, 1000.0, 0.1);
     const quickSettingsDampingRow = this._addSpinRow(qsGroup, settings, 'quick-settings-spring-damping', 'Spring Damping', 'Spring damping', 0.0, 1000.0, 0.1);
     const quickSettingsMassRow = this._addSpinRow(qsGroup, settings, 'quick-settings-spring-mass', 'Spring Mass', 'Spring mass', 0.0, 1.0, 0.1);
-    const quickSettingsIntervalRow = this._addSpinRow(qsGroup, settings, 'quick-settings-animation-interval-ms', 'Animation Interval (ms)', 'Animation interval', 0, 1000, 1);
+    const quickSettingsIntervalRow = this._addSpinRow(qsGroup, settings, 'quick-settings-animation-interval-ms', 'Background Refresh Interval (ms)', 'How often the blurred desktop/window content behind the menu is re-sampled during the open/close animation. 0 refreshes every frame (smoothest, most expensive).', 0, 1000, 1);
 
     settings.bind('enable-quick-settings-animation', quickSettingsStiffnessRow, 'sensitive', Gio.SettingsBindFlags.GET);
     settings.bind('enable-quick-settings-animation', quickSettingsDampingRow, 'sensitive', Gio.SettingsBindFlags.GET);
