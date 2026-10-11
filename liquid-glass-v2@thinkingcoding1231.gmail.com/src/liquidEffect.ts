@@ -1,6 +1,7 @@
 // src/liquidEffect.js
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
+import Cogl from 'gi://Cogl';
 import Gio from 'gi://Gio';
 import { GLASS_FRAGMENT_SHADER } from './shaderSources.js';
 
@@ -29,7 +30,9 @@ export const LiquidEffect = GObject.registerClass({
     // GLSL is compiled into shaderSources.ts during the build. Loading it from
     // memory avoids a synchronous Gio file read for every card/menu effect and
     // keeps an installed extension working if its source shader files vanish.
-    this.set_shader_source(GLASS_FRAGMENT_SHADER);
+    // NOTE (GNOME 51): Clutter.ShaderEffect.set_shader_source() was removed.
+    // The shader is now supplied via vfunc_get_static_snippet() below.
+    // (kept for reference) this.set_shader_source(GLASS_FRAGMENT_SHADER);
 
     // Initialize shader uniform variables.
     // These serve as default fallbacks until real values are supplied.
@@ -55,6 +58,33 @@ export const LiquidEffect = GObject.registerClass({
       // settingsがない場合のデフォルトフォールバック
       this._setFloat('max_z', 25.0);
       this._setFloat('displacement_scale', 78.5);
+    }
+  }
+
+  // GNOME 51 port: Clutter.ShaderEffect.set_shader_source() was removed.
+  // The effect now supplies its GLSL as a Cogl.Snippet: everything before
+  // `void main()` becomes snippet declarations, the main() body becomes the
+  // replacement code. The Cogl template declares the layer-0 sampler as
+  // cogl_sampler0, so our own declaration is dropped and references renamed.
+  vfunc_get_static_snippet(): Cogl.Snippet {
+    // Must never throw or return null: Clutter dereferences this result without
+    // a NULL check and gnome-shell segfaults on logout/login.
+    try {
+      const src = GLASS_FRAGMENT_SHADER;
+      const mainIdx = src.indexOf('void main()');
+      const openBrace = src.indexOf('{', mainIdx);
+      const declarations = src
+        .slice(0, mainIdx)
+        .replace(/uniform sampler2D cogl_sampler;\s*/g, '');
+      const body = src
+        .slice(openBrace + 1, src.lastIndexOf('}'))
+        .replace(/cogl_sampler\b/g, 'cogl_sampler0');
+      const snippet = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, declarations, null);
+      snippet.set_replace(body);
+      return snippet;
+    } catch (e: any) {
+      logError(e, 'LiquidEffect: snippet build failed, using pass-through');
+      return Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, '', 'cogl_color_out = cogl_color_in;\n');
     }
   }
 

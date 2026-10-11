@@ -5,6 +5,7 @@
   "settings-schema": "org.gnome.shell.extensions.liquid-glass-v2@thinkingcoding1231.gmail.com",
   "shell-version": [
     "49",
-    "50"
+    "50",
+    "51"
   ]
 }

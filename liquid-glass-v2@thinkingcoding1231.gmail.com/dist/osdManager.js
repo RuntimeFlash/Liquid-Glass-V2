@@ -5,7 +5,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import { LiquidEffect } from './liquidEffect.js';
-import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js';
+import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js?v=mv3llad7';
 import { UnpickableClone, hexToRgb, rgbToHex } from './utils.js';
 // ========== Configuration Parameters (Defaults, overridden by settings) ==========
 const SHADER_PADDING = 20;

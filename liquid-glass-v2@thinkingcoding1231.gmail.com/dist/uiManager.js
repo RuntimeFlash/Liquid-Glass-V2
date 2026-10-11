@@ -7,7 +7,7 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Gio from 'gi://Gio';
 import { LiquidEffect } from './liquidEffect.js';
-import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js';
+import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js?v=mv3llad7';
 import { UnpickableClone, UnpickableActor, suppressGnomePopupAnimation, hexToRgb, rgbToHex } from './utils.js';
 // ========== Configuration Parameters ==========
 // Transparent padding outside the glass area. 
@@ -36,6 +36,10 @@ export class UIManager {
     _signals;
     _animSignalId = 0;
     _pendingMenuClosedCallback = null;
+    // Backstop for GNOME's BoxPointer input mute during our custom close
+    // animation; see the onSuppressClose hook in the constructor.
+    _pendingRestoreInput = null;
+    _pendingRestoreInputTimeoutId = 0;
     _restorePopupAnimPatch = null;
     _frameSyncId;
     _glassExpand;
@@ -171,8 +175,35 @@ export class UIManager {
         // default behavior. Arrow functions evaluate lazily — constructor order is safe.
         this._restorePopupAnimPatch = suppressGnomePopupAnimation(this.menu, {
             isCustomAnimationEnabled: () => this._enableAnimation && this._isEffectActive && !!this.bgActor,
-            onSuppressOpen: () => { this._pendingMenuClosedCallback = null; },
-            onSuppressClose: (cb) => { this._pendingMenuClosedCallback = cb; },
+            onSuppressOpen: () => {
+                this._pendingMenuClosedCallback = null;
+                this._flushPendingRestoreInput();
+            },
+            onSuppressClose: (cb, restoreInput) => {
+                this._pendingMenuClosedCallback = cb;
+                this._pendingRestoreInput = restoreInput ?? null;
+                // Safety net: if the fade-out never reaches its end, GNOME's input
+                // mute would never lift and the menu could not be dismissed.
+                if (this._pendingRestoreInputTimeoutId)
+                    GLib.source_remove(this._pendingRestoreInputTimeoutId);
+                this._pendingRestoreInputTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+                    this._pendingRestoreInputTimeoutId = 0;
+                    // The fade-out never reached its end (actor removed, tick stalled,
+                    // extension disabled mid-close). Finish the close by hand: release
+                    // the input mute, take the popup off screen and emit 'menu-closed'.
+                    // This runs at most once -- a fade that does finish clears the
+                    // timeout source first.
+                    this._flushPendingRestoreInput();
+                    const pendingCloseCb = this._pendingMenuClosedCallback;
+                    this._pendingMenuClosedCallback = null;
+                    try {
+                        this.menu?.actor?.hide();
+                    }
+                    catch (e) { }
+                    pendingCloseCb?.();
+                    return GLib.SOURCE_REMOVE;
+                });
+            },
         });
     }
     setup() {
@@ -1120,6 +1151,20 @@ export class UIManager {
             return GLib.SOURCE_CONTINUE;
         });
     }
+    // Releases the input mute GNOME applies while a popup animates closed. Safe
+    // to call when nothing is pending.
+    _flushPendingRestoreInput() {
+        if (this._pendingRestoreInputTimeoutId) {
+            GLib.source_remove(this._pendingRestoreInputTimeoutId);
+            this._pendingRestoreInputTimeoutId = 0;
+        }
+        const restore = this._pendingRestoreInput;
+        this._pendingRestoreInput = null;
+        try {
+            restore?.();
+        }
+        catch (e) { }
+    }
     _disableClippingRecursively(actor) {
         if (!actor)
             return;
@@ -1325,6 +1370,8 @@ export class UIManager {
                         // GNOME's BoxPointer.close onComplete was suppressed — emit 'menu-closed' now
                         let pendingCloseCb = this._pendingMenuClosedCallback;
                         this._pendingMenuClosedCallback = null;
+                        // Normal end of the close animation: un-mute input now.
+                        this._flushPendingRestoreInput();
                         pendingCloseCb?.();
                         this.bgActor.opacity = 0; // Ensure the background is fully transparent when closed
                         this.animActor.opacity = 0;
@@ -1442,9 +1489,11 @@ export class UIManager {
     }
     cleanup() {
         // Restore GNOME's original _boxPointer methods first so the forced
-        // menu.close(false) inside _removeEffect runs through the original path.
+        // menu.close(false) runs through the original path.
         this._restorePopupAnimPatch?.();
         this._restorePopupAnimPatch = null;
+        // Never leave the popup's input muted after teardown.
+        this._flushPendingRestoreInput();
         if (!this.targetActor) {
             this._pendingMenuClosedCallback = null;
             return;

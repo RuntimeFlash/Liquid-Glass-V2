@@ -39,7 +39,7 @@ export class DashManager {
   private _glassExpand: number;
 
   private bgClone: Clutter.Clone | null = null;
-  private wallpaperClone: Clutter.Clone | null = null;
+  private wallpaperActor: Clutter.Actor | null = null;
   private windowClonesContainer: Clutter.Actor | null = null;
   private _windowClones: Map<Clutter.Actor, Clutter.Clone>;
 
@@ -302,30 +302,30 @@ export class DashManager {
 
     this.bgActor.hide();
 
-    // Eagerly build the static wallpaper clone (Clutter.Image texture — paints offstage)
-    // so it exists before any Overview signal fires. This fixes the black where
-    // overview opened before desktop frame-sync ever ran and wallpaperClone was null.
-    let ensureWallpaperClone = () => {
-      if (this.wallpaperClone) return;
+    // Add the wallpaper-only actor (a BackgroundManager-backed Meta.BackgroundActor)
+    // directly to the FBO. A live child keeps painting even while the desktop
+    // background group is unmapped in overview, unlike a Clutter.Clone of it.
+    let ensureWallpaperActor = () => {
+      if (this.wallpaperActor) return;
       try {
         const monitorIndex = Main.layoutManager.findIndexForActor(this.targetActor);
         const mi = monitorIndex >= 0 ? monitorIndex : (Main.layoutManager.primaryIndex ?? 0);
         const cache = this._wallpaperCache ?? WallpaperCache.getDefault();
         const source = cache.getWallpaperActorForMonitor(mi);
         if (source) {
-          this.wallpaperClone = new UnpickableClone({ source });
-          this.fboContainer?.add_child(this.wallpaperClone);
-          this.wallpaperClone.visible = false;
-          this.wallpaperClone.hide();
+          this.wallpaperActor = source;
+          this.fboContainer?.add_child(this.wallpaperActor);
+          this.wallpaperActor.visible = false;
+          this.wallpaperActor.hide();
         } else {
-          console.log(`[Liquid Glass] ensureWallpaperClone: no source for monitor ${mi}`);
+          console.log(`[Liquid Glass] ensureWallpaperActor: no source for monitor ${mi}`);
         }
       } catch (e) {
-        console.log(`[Liquid Glass] Wallpaper clone creation failed: ${e}`);
+        console.log(`[Liquid Glass] Wallpaper actor creation failed: ${e}`);
       }
     };
     // Build immediately so Overview has a valid texture even before first frameTick
-    try { ensureWallpaperClone(); } catch (e) {}
+    try { ensureWallpaperActor(); } catch (e) {}
 
     let buildClones = () => {
       if (!this.bgActor) return;
@@ -339,8 +339,8 @@ export class DashManager {
         this.fboContainer?.add_child(this.bgClone);
       }
 
-      // Static wallpaper (texture-backed Clutter.Image) — ensure exists
-      ensureWallpaperClone();
+      // Wallpaper-only actor — ensure exists
+      ensureWallpaperActor();
 
       if (!this.windowClonesContainer) {
         this.windowClonesContainer = new UnpickableActor();
@@ -562,7 +562,7 @@ export class DashManager {
     };
     try { connectDockVisibilityChain(); } catch (e) {}
 
-    this._overviewSignalIds.push(Main.overview.connect('showing', () => {
+    let enterOverview = () => {
       this._inOverview = true;
       this._stopFrameSync();
       this._destroyWindowClones();
@@ -570,29 +570,27 @@ export class DashManager {
         this.windowClonesContainer.visible = false;
         this.windowClonesContainer.hide();
       }
-      // Ensure FBO clones exist before syncing geometry — fixes black when
-      // overview opens before desktop frame-sync ever built the clones.
-      buildClones();
+      // Wallpaper-only backdrop. No live bg/window clones and no frame polling
+      // are built while overview is open — just one geometry sync.
+      ensureWallpaperActor();
       this._syncGeometry();
-    }));
+    };
 
-    this._overviewSignalIds.push(Main.overview.connect('shown', () => {
-      this._inOverview = true;
-      this._stopFrameSync();
-      this._destroyWindowClones();
-      if (this.windowClonesContainer) {
-        this.windowClonesContainer.visible = false;
-        this.windowClonesContainer.hide();
-      }
-      buildClones();
-      this._syncGeometry();
-    }));
+    this._overviewSignalIds.push(Main.overview.connect('showing', enterOverview));
+    this._overviewSignalIds.push(Main.overview.connect('shown', enterOverview));
 
     this._overviewSignalIds.push(Main.overview.connect('hidden', () => {
       this._inOverview = false;
       this._destroyWindowClones();
+      if (this.wallpaperActor) {
+        try {
+          this.wallpaperActor.visible = false;
+          this.wallpaperActor.hide();
+        } catch (e) {}
+      }
       if (this.bgActor && this._isDockEffectivelyVisible()) {
         try {
+          buildClones();
           if (this.windowClonesContainer) {
             this.windowClonesContainer.visible = true;
             this.windowClonesContainer.show();
@@ -935,24 +933,24 @@ export class DashManager {
       this._lastBgX = bgX; this._lastBgY = bgY;
     }
 
-    // Wallpaper clone (Clutter.Image texture) — always keep positioned, and toggle
-    // visibility independently of bgClone so overview wallpaper shows even if bgClone
+    // Wallpaper-only actor — always keep positioned, and toggle visibility
+    // independently of bgClone so overview wallpaper shows even if a live clone
     // was never built (e.g. dock was auto-hidden before overview opened).
-    if (this.wallpaperClone) {
-      // The cached wallpaper is monitor-local (origin at monitor.x/y). The
-      // clone lives in the half-scale FBO, so map screen coordinates to it:
-      // screenX = bgX + (cloneX * 2)  =>  cloneX = (monitor.x - bgX) * 0.5.
+    if (this.wallpaperActor) {
+      // The wallpaper actor is monitor-local (origin at monitor.x/y). It lives
+      // in the half-scale FBO, so map screen coordinates to it:
+      // screenX = bgX + (actorX * 2)  =>  actorX = (monitor.x - bgX) * 0.5.
       // For the primary monitor this reduces to -bgX * 0.5.
       const wpx = monitor ? (monitor.x - bgX) * 0.5 : -bgX * 0.5;
       const wpy = monitor ? (monitor.y - bgY) * 0.5 : -bgY * 0.5;
-      this.wallpaperClone.set_position(wpx, wpy);
-      this.wallpaperClone.set_scale(0.5, 0.5);
+      this.wallpaperActor.set_position(wpx, wpy);
+      this.wallpaperActor.set_scale(0.5, 0.5);
       if (this._inOverview) {
-        this.wallpaperClone.visible = true;
-        this.wallpaperClone.show();
+        this.wallpaperActor.visible = true;
+        this.wallpaperActor.show();
       } else {
-        this.wallpaperClone.visible = false;
-        this.wallpaperClone.hide();
+        this.wallpaperActor.visible = false;
+        this.wallpaperActor.hide();
       }
     }
 
@@ -964,17 +962,12 @@ export class DashManager {
       this.windowClonesContainer.set_scale(0.5, 0.5);
 
       if (this._inOverview) {
-        // OVERVIEW MODE: wallpaperClone is already visible above; hide live clones.
+        // OVERVIEW MODE: wallpaperActor is already visible above; hide live clones.
         this.windowClonesContainer.visible = false;
         this.windowClonesContainer.hide();
         this._destroyWindowClones();
         this.bgClone.visible = false;
         this.bgClone.hide();
-        // If wallpaperClone failed to build, fall back to live bgClone (may be dimmed)
-        if (!this.wallpaperClone) {
-          this.bgClone.visible = true;
-          this.bgClone.show();
-        }
       } else {
         // DESKTOP MODE: live wallpaper + live window clones (normal glass)
         this.bgClone.visible = true;
@@ -1140,13 +1133,22 @@ export class DashManager {
       this.effect = null;
     }
 
+    // Detach the shared wallpaper actor so destroying bgActor does not destroy
+    // it; the WallpaperCache keeps ownership and may hand it back on re-apply.
+    if (this.wallpaperActor) {
+      try {
+        const parent = this.wallpaperActor.get_parent();
+        if (parent) parent.remove_child(this.wallpaperActor);
+      } catch (e) {}
+      this.wallpaperActor = null;
+    }
+
     if (this.bgActor) {
       this.bgActor.destroy();
       this.bgActor = null;
     }
     this.blurEffect = null;
     this.bgClone = null;
-    this.wallpaperClone = null;
     this.fboContainer = null;
     this.windowClonesContainer = null;
   }

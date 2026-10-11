@@ -2,7 +2,7 @@ import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import { QuickSettingsLayoutEditor } from './layoutEditor.js';
+import { QuickSettingsLayoutEditor } from './layoutEditor.js?v=mv3llad7';
 const DEFAULT_GRID_ORDER = [
     ['network', 2], ['night', 1], ['airplane', 1],
     ['bluetooth', 2], ['dark', 1], ['dnd', 1],
@@ -43,7 +43,7 @@ export class CustomQuickSettingsRenderer {
         if (!this.nativeGrid)
             return;
         this.root = new St.BoxLayout({
-            vertical: true,
+            orientation: Clutter.Orientation.VERTICAL,
             style_class: 'liquid-glass-custom-quick-settings',
             x_expand: true,
         });
@@ -95,18 +95,64 @@ export class CustomQuickSettingsRenderer {
         catch (e) {
             return;
         }
-        if (controls.size === this._renderedKeys.size) {
-            let changed = false;
-            for (let key of this._renderedKeys) {
-                if (!controls.has(key) || controls.get(key)?.source !== this._renderedSources.get(key)) {
-                    changed = true;
-                    break;
-                }
-            }
-            if (!changed)
-                return;
-        }
+        if (this._layoutStillMatches(controls))
+            return;
         this.refresh();
+    }
+    /**
+     * True when the layout the renderer is showing still corresponds to what the
+     * native grid currently offers.
+     *
+     * The subtlety this exists for: `_build()` borrows the native `quick-slider`
+     * children into the custom layout, so by the next pass they are no longer
+     * children of `nativeGrid` and `_discoverControls()` cannot see them. A plain
+     * key-set comparison therefore concluded "the controls changed" on *every*
+     * mount, and rebuilt the whole layout -- new card actors, and with them every
+     * liquid-glass backing -- on every single open. That rebuild is what stalled
+     * the open frame long enough for the stamp spring to jump.
+     *
+     * A rendered key is accepted either because the native grid still offers it
+     * with the same source actor, or because that source actor is a slider the
+     * renderer is still holding in its own tree.
+     */
+    _layoutStillMatches(controls) {
+        for (let key of this._renderedKeys) {
+            let renderedSource = this._renderedSources.get(key);
+            let discovered = controls.get(key);
+            if (discovered) {
+                // Same key but a different actor underneath (the shell rebuilt the
+                // control): the card has to be rebuilt.
+                if (discovered.source !== renderedSource)
+                    return false;
+                continue;
+            }
+            // Not discoverable: only acceptable while we are the one holding it.
+            if (renderedSource && this._isOwnedByLayout(renderedSource))
+                continue;
+            return false;
+        }
+        // ...and nothing new turned up that the layout does not already show.
+        for (let key of controls.keys()) {
+            if (!this._renderedKeys.has(key))
+                return false;
+        }
+        return true;
+    }
+    /** True while `actor` sits inside the renderer's own root. */
+    _isOwnedByLayout(actor) {
+        if (!actor || !this.root)
+            return false;
+        try {
+            let parent = actor.get_parent?.() ?? null;
+            let guard = 0;
+            while (parent && guard++ < 32) {
+                if (parent === this.root)
+                    return true;
+                parent = parent.get_parent?.() ?? null;
+            }
+        }
+        catch (e) { }
+        return false;
     }
     destroy() {
         this._layoutEditor?.close();
@@ -431,7 +477,7 @@ export class CustomQuickSettingsRenderer {
         icon.y_align = Clutter.ActorAlign.CENTER;
         box.add_child(icon);
         if (control.kind === 'wide') {
-            let labels = new St.BoxLayout({ vertical: true, x_expand: true, style_class: 'liquid-glass-custom-card-labels' });
+            let labels = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, x_expand: true, style_class: 'liquid-glass-custom-card-labels' });
             let subtitleText = this._subtitle(control.source, control.key);
             let titleLabel = new St.Label({ text: control.title, style_class: 'liquid-glass-custom-card-title' });
             labels.add_child(titleLabel);
@@ -536,14 +582,6 @@ export class CustomQuickSettingsRenderer {
             let key = this._keyFor(title, icon);
             if (!key)
                 continue;
-            // Multiple native actors can represent one logical control (notably
-            // Wi-Fi plus a newly connected Ethernet device). Mark aliases as
-            // claimed so the auto-detector cannot turn them into a new layout tile.
-            if (controls.has(key)) {
-                matchedRoots.add(root);
-                continue;
-            }
-            matchedRoots.add(root);
             let src = source;
             if (`${source.style_class || ''}`.includes('quick-toggle-menu-button')) {
                 let p = source.get_parent?.();
@@ -555,6 +593,21 @@ export class CustomQuickSettingsRenderer {
                     p = p.get_parent?.();
                 }
             }
+            // Multiple native actors can represent one logical control (notably
+            // Wi-Fi plus a newly connected Ethernet device). Mark aliases as
+            // claimed so the auto-detector cannot turn them into a new layout tile.
+            if (controls.has(key)) {
+                matchedRoots.add(root);
+                // GNOME orders the wired toggle before the wireless one, and both map
+                // to the 'network' key. The wired toggle would otherwise win and its
+                // menu (which has no Wi-Fi networks) drives the Wi-Fi submenu, showing
+                // "Networks Unavailable". Prefer the wireless toggle as the source.
+                if (key === 'network' && this._isWifiSource(src) &&
+                    !this._isWifiSource(controls.get(key).source))
+                    controls.get(key).source = src;
+                continue;
+            }
+            matchedRoots.add(root);
             let kind = ['network', 'bluetooth', 'power-mode', 'caffeine'].includes(key) ? 'wide' : 'single';
             let submenu = key === 'network' || key === 'bluetooth' || key === 'caffeine' || key === 'power-mode' || key === 'power'
                 ? (key === 'network' ? 'wifi' : key === 'power-mode' || key === 'power' ? 'power' : key)
@@ -698,6 +751,27 @@ export class CustomQuickSettingsRenderer {
         if (value.includes('battery-level') || value.includes('battery-') || value.includes('power-level'))
             return 'battery';
         return null;
+    }
+    /**
+     * Whether a discovered native actor is the Wi-Fi (wireless) toggle rather
+     * than the wired/ethernet one. Both share the 'network' key, so the wired
+     * toggle must not win the source slot: its menu has no Wi-Fi networks.
+     */
+    _isWifiSource(actor) {
+        if (!actor)
+            return false;
+        try {
+            // NM.DeviceType.WIFI === 2; the wireless toggle owns _scanDevices().
+            if (actor._deviceType === 2)
+                return true;
+            if (typeof actor._scanDevices === 'function')
+                return true;
+            let text = `${this._labels(actor).join(' ')} ${this._icon(actor)} ${actor.constructor?.name || ''}`.toLowerCase();
+            return /wi-?fi|wireless|NMWireless/.test(text);
+        }
+        catch (e) {
+            return false;
+        }
     }
     _labels(actor) {
         let labels = [];

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node scripts/build-shaders.mjs && tsc",
+    "build": "node scripts/build-shaders.mjs && tsc && node scripts/stamp-modules.mjs",
     "watch": "node scripts/build-shaders.mjs && tsc -w"
   },
   "devDependencies": {

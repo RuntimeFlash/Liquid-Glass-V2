@@ -8,10 +8,14 @@ import Meta from 'gi://Meta';
 import Pango from 'gi://Pango';
 import { LiquidEffect } from './liquidEffect.js';
 import { BackdropBlurEffect } from './backdropBlur.js';
-import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js';
+import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js?v=mv3llad7';
 import { UnpickableClone, UnpickableActor, suppressGnomePopupAnimation, hasStyleClass, hexToRgb } from './utils.js';
-import { CustomSubmenuRenderer } from './customSubmenu.js';
-import { CustomQuickSettingsRenderer } from './customQuickSettings.js';
+import { CustomSubmenuRenderer } from './customSubmenu.js?v=mv3llad7';
+import { CustomQuickSettingsRenderer } from './customQuickSettings.js?v=mv3llad7';
+import { QuickSettingsStampAnimation } from './quickSettingsAnimation.js?v=mv3llad7';
+// DEV-PROBE-START
+import { bump } from './devProbe.js?v=mv3llad7';
+// DEV-PROBE-END
 // ========== Configuration Parameters ==========
 // Transparent padding outside the glass area. 
 // This prevents the shader distortion or rounded corners from being clipped by the actor bounds.
@@ -29,6 +33,30 @@ const QS_CARD_SHADER_PADDING = 20;
 const QS_BLUR_OVERLAY_PADDING = 62;
 const QS_BLUR_OVERLAY_CORNER_RADIUS = 24;
 const QS_BLUR_OVERLAY_FEATHER = 60;
+// How much of the backdrop blur runs at reduced resolution. 2 aims for half the
+// linear resolution, i.e. a quarter of the pixels, in the blur's offscreen
+// buffer.
+//
+// Shell.BlurEffect allocates that buffer at exactly the actor's allocation
+// (update_actor_box / update_framebuffer in shell-blur-effect.c), and Shell's
+// own adaptive downscale only starts reducing it above radius 12 -- so at the
+// radii this extension ships with (default 3) the backdrop buffer is always
+// allocated and re-blurred at full menu size. Rendering the blur into a
+// smaller container and scaling that container back up gives the same buffer
+// reduction for any radius.
+//
+// Only the blur is reduced. The result is composited into the menu-sized clip
+// box and the feathered corner mask is chained on top of that, so the final
+// pass and the mask stay full resolution and the mask corners stay per-pixel
+// accurate. The blur itself is low frequency, so the loss is not visible.
+//
+// The radius has to come down by the same factor: ShellBlurEffect reports the
+// on-screen blur as radius * (screen size / allocation), so a container
+// allocated at size/k needs radius/k. k is derived from the radius rather than
+// fixed at 2 so that stays exact for odd radii -- the radius property is an int,
+// so base 3 becomes radius 2 at k 1.5, which still reads as a 3px blur, whereas
+// forcing k 2 would round the radius up to 2 and visibly soften the backdrop.
+const QS_BLUR_FBO_DIVISOR = 2;
 // Drives the verbose [LG-*] animation tracing. Off by default: the template
 // literals below were built on every open/close stop regardless of whether
 // anything consumes the output.
@@ -41,6 +69,11 @@ const QS_ANIM_CLONE_REBUILD_FRAMES = 2;
 // Assumed frame length when converting the millisecond "Animation Interval"
 // setting into a number of frames between window-clone rebuilds.
 const QS_ASSUMED_FRAME_MS = 16.667;
+// Submenu → QS return entrance: fade + subtle rise, crossfaded with the
+// submenu shrink. No scale is animated (backings can never drift from
+// content) and no BACK overshoot (no extra blurred-FBO repaints under load).
+const QS_RETURN_DURATION_MS = 160;
+const QS_RETURN_RISE_PX = 8;
 function rectsIntersect(a, b) {
     return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
@@ -77,14 +110,15 @@ export class QuickSettingsManager {
     _glassExpand;
     _menuXoffset;
     _menuYoffset;
-    // Spring physics parameters
-    _springScale;
-    _springPos;
-    _springStiffness;
-    _springDamping;
-    _springMass;
+    // ---- Open/close transition -------------------------------------------
+    // The whole stamp lives in QuickSettingsStampAnimation: it owns the frame
+    // loop, the springs and the single ordered place where scale/opacity are
+    // applied and the glass is re-synced. Nothing else may move the popup while
+    // it is running.
+    _anim = null;
     _enableAnimation;
-    _tickId;
+    // Mirrors _anim.isRunning for the sync paths that only need to know whether
+    // geometry is being driven by the transition.
     _isAnimating = false;
     _contrastSampler;
     _adaptiveTimerId;
@@ -114,15 +148,36 @@ export class QuickSettingsManager {
     _suppressNextCloseAnimation = false;
     _isSubmenuTransitioning = false;
     _pendingMenuClosedCallback = null;
+    // Backstop for GNOME's BoxPointer input mute during our custom close
+    // animation; see the onSuppressClose hook in the constructor.
+    _pendingRestoreInput = null;
+    _pendingRestoreInputTimeoutId = 0;
     _restorePopupAnimPatch = null;
     _cardBackingsFrozen = false;
     _cardBackingSnapshots = new Map();
+    // Generation counter guarding the deferred post-reveal unfreeze: a new
+    // submenu handoff invalidates a still-queued unfreeze so it can never clear
+    // a fresher frozen snapshot.
+    _frozenUnfreezeGen = 0;
+    // Generation counter for the submenu → QS return entrance ease. A new close
+    // (or disable) invalidates in-flight ease frames and completion callbacks.
+    _revealEaseGen = 0;
+    // Last good backing geometry per card. When a card reports transient
+    // 0-size/unmapped geometry for a frame or two during reflow (notably the
+    // borrowed volume/brightness sliders), the backing reuses this instead of
+    // hiding, so the glass never flashes missing. Refilled on every valid sync.
+    _cardLastGoodRect = new Map();
     // The actor the stamp animation actually scales. For Quick Settings this is
     // NOT menu.actor: QuickSettingsMenu overrides menu.actor to a 0x0 wrapper
     // (quickSettings.js) with the real popup (menu._boxPointer) as its child, so
     // scaling menu.actor pivots around stage (0,0). Scaling the boxpointer gives
     // real geometry and a real pivot.
     _stampActor = null;
+    // ---- Frosted backdrop ownership --------------------------------------
+    // The frosted sheet is Quick Settings' own. It is measured from the popup's
+    // settled rect; the floating submenu no longer borrows it (it carries its own
+    // glass stack again), so there is no borrower state here.
+    //
     // Fullscreen background blur overlay that fades in/out with the QS menu animation
     _qsBlurOverlay = null;
     _qsBlurOverlayEffect = null;
@@ -133,9 +188,25 @@ export class QuickSettingsManager {
     // clipBox -> fboContainer with an ACTOR-mode blur + desktop/window clones.
     _qsBlurClipBox = null;
     _qsBlurFboContainer = null;
+    // Counter-scale box inside _qsBlurFboContainer: everything below it is drawn
+    // at 1/k so the whole menu-sized source fits the k-times-smaller blur buffer.
+    _qsBlurHalfBox = null;
     _qsBlurBgClone = null;
     _qsBlurWindowClonesContainer = null;
     _qsBlurWindowClones = new Map();
+    // Window-set token the overlay's clones were last built from. ClutterClone
+    // keeps painting a source that has been unmapped (clutter_clone_paint turns on
+    // enable-paint-unmapped for sources that are not mapped), so a clone of a
+    // window that left the active workspace goes on rendering that window. The
+    // overlay's clone set therefore has to follow the *visible* window set, and
+    // this token is how the sync knows it must rebuild instead of just moving.
+    _qsBlurCloneSig = '';
+    // Effective backdrop blur radius before the FBO downscale is applied to it
+    // (-1 = not read from the settings yet), and the derived pair actually pushed
+    // onto the overlay (see _blurDownscaleFor).
+    _overlayBlurBase = -1;
+    _blurFboScale = 1;
+    _blurFboRadius = 0;
     // ---- Animation-path scratch state -------------------------------------
     // Reused across ticks instead of reallocated: a single Clutter.Point for
     // matrix transforms, and the per-card rect scratch used to cull window clones.
@@ -145,7 +216,12 @@ export class QuickSettingsManager {
     // clone children are pixel-identical for the length of the fade, so only the
     // first frame or two pay for rebuilding them; later frames just move the
     // container, which carries every child along.
-    _windowCloneRebuildFramesLeft = 0;
+    _animCloneRebuildFrames = 0;
+    // Pending "lazy widget" clip sweep (see _scheduleLateClipSweep).
+    _clipSweepPendingId = 0;
+    // Card count captured when the menu opened, so the late sweep can tell
+    // whether anything actually appeared and skip the expensive re-pass.
+    _sweepBaselineCardCount = 0;
     // Result of applying a parent's transform to the stage origin. Card backings
     // and the blur overlay are siblings inserted below the menu, so their parent
     // normally projects identity to the stage, which lets the sync path skip a
@@ -154,6 +230,19 @@ export class QuickSettingsManager {
     // Actors that need clip_to_allocation disabled, keyed by the sweep root.
     // Collected once per sweep so later re-applications don't re-walk the tree.
     _clipTargetsByRoot = new WeakMap();
+    // Coalesced card-sync requests: many notify::allocation / child-added signals
+    // can fire within a single frame during open/layout. They share one deferred
+    // sync instead of each running a full _syncCardBackings synchronously.
+    _cardSyncCoalescedPending = false;
+    _cardEffectsCoalescedPending = false;
+    // Reduced-blur state during transitions: halves ACTOR blur radii while the
+    // menu fades so large FBO re-blurs stay in frame budget under load.
+    _transitionBlurReduced = false;
+    _savedOverlayBlurRadius = -1;
+    // Cached HiDPI scale so _syncBlurOverlayGeometry doesn't hit ThemeContext
+    // (a GI round-trip) on every animation tick.
+    _cachedThemeScale = 1;
+    _cachedThemeScaleUs = 0;
     constructor(extensionPath, settings) {
         this.extensionPath = extensionPath;
         this._settings = settings;
@@ -170,15 +259,10 @@ export class QuickSettingsManager {
         this._glassExpand = 0;
         this._menuXoffset = 0;
         this._menuYoffset = 0;
-        // Custom spring physics parameters for the open/close animation
-        // Spring(stiffness, damping, mass)
-        this._springScale = new Spring(120, 8, 1.0);
-        this._springPos = new Spring(300, 12, 1.0);
-        this._springStiffness = 120;
-        this._springDamping = 8;
-        this._springMass = 1.0;
+        // The open/close stamp is built in _applyEffect(), where the settings that
+        // parameterise it are first read. Until then there is no transition to run.
+        this._anim = null;
         this._enableAnimation = true;
-        this._tickId = 0;
         this._contrastSampler = new StageContrastSampler();
         this._adaptiveTimerId = 0;
         this._adaptiveInFlight = false;
@@ -209,20 +293,52 @@ export class QuickSettingsManager {
         // while the effect is active). Arrow functions evaluate lazily.
         this._restorePopupAnimPatch = suppressGnomePopupAnimation(this.menu, {
             isCustomAnimationEnabled: () => this._enableAnimation && this._isEffectActive,
-            onSuppressOpen: () => { this._pendingMenuClosedCallback = null; },
-            onSuppressClose: (cb) => { this._pendingMenuClosedCallback = cb; },
+            onSuppressOpen: () => {
+                this._pendingMenuClosedCallback = null;
+                this._flushPendingRestoreInput();
+            },
+            onSuppressClose: (cb, restoreInput) => {
+                this._pendingMenuClosedCallback = cb;
+                this._pendingRestoreInput = restoreInput ?? null;
+                // Backstop: if our fade-out never finishes, GNOME's input mute would
+                // keep Quick Settings open and undismissable.
+                if (this._pendingRestoreInputTimeoutId)
+                    GLib.source_remove(this._pendingRestoreInputTimeoutId);
+                this._pendingRestoreInputTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+                    this._pendingRestoreInputTimeoutId = 0;
+                    // The fade-out never reached its end (actor removed, tick stalled,
+                    // extension disabled mid-close). Finish the close by hand: release
+                    // the input mute, take the popup off screen and emit 'menu-closed'.
+                    // This runs at most once -- a fade that does finish clears the
+                    // timeout source first.
+                    this._flushPendingRestoreInput();
+                    const pendingCloseCb = this._pendingMenuClosedCallback;
+                    this._pendingMenuClosedCallback = null;
+                    try {
+                        this.menu?.actor?.hide();
+                    }
+                    catch (e) { }
+                    pendingCloseCb?.();
+                    return GLib.SOURCE_REMOVE;
+                });
+            },
         });
     }
     setup() {
         if (!this._settings)
             return;
+        // DEV-PROBE-START
+        import('./devProbe.js?v=mv3llad7').then(({ installDevProbe }) => {
+            try {
+                installDevProbe(this);
+            }
+            catch (e) {
+                console.log(`[LG-PROBE] ${e}`);
+            }
+        }).catch((e) => console.log(`[LG-PROBE] import failed: ${e}`));
+        // DEV-PROBE-END
         this._bindSettings();
         this._enableAnimation = this._settings.get_boolean('enable-quick-settings-animation');
-        this._springStiffness = this._settings.get_double('quick-settings-spring-stiffness');
-        this._springDamping = this._settings.get_double('quick-settings-spring-damping');
-        this._springMass = this._settings.get_double('quick-settings-spring-mass');
-        this._springScale.updateParams(this._springStiffness, this._springDamping, this._springMass);
-        this._springPos.updateParams(this._springStiffness, this._springDamping, this._springMass);
         this._openScale = Math.max(1.0, this._settings.get_double('quick-settings-open-scale'));
         if (this._settings.get_boolean('enable-quick-settings-glass')) {
             this._applyEffect();
@@ -267,25 +383,20 @@ export class QuickSettingsManager {
             this._enableAnimation = this._settings.get_boolean('enable-quick-settings-animation');
         });
         connectSetting('quick-settings-spring-stiffness', () => {
-            this._springStiffness = this._settings.get_double('quick-settings-spring-stiffness');
-            if (this._springScale)
-                this._springScale.updateParams(this._springStiffness, this._springDamping, this._springMass);
+            this._applySpringSettings();
         });
         connectSetting('quick-settings-spring-damping', () => {
-            this._springDamping = this._settings.get_double('quick-settings-spring-damping');
-            if (this._springScale)
-                this._springScale.updateParams(this._springStiffness, this._springDamping, this._springMass);
+            this._applySpringSettings();
         });
         connectSetting('quick-settings-spring-mass', () => {
-            this._springMass = this._settings.get_double('quick-settings-spring-mass');
-            if (this._springScale)
-                this._springScale.updateParams(this._springStiffness, this._springDamping, this._springMass);
+            this._applySpringSettings();
         });
         connectSetting('quick-settings-animation-interval-ms', () => {
             this._animationInterval = this._settings.get_int('quick-settings-animation-interval-ms');
         });
         connectSetting('quick-settings-open-scale', () => {
             this._openScale = Math.max(1.0, this._settings.get_double('quick-settings-open-scale'));
+            this._anim?.setOpenScale(this._openScale);
         });
         connectSetting('quick-settings-tint-color', () => {
             // The menu-level glass is gone; the per-card effects read the tint
@@ -301,8 +412,9 @@ export class QuickSettingsManager {
         });
         connectSetting('quick-settings-blur-radius', () => {
             let blurRadius = this._settings.get_int('quick-settings-blur-radius');
-            if (this._qsBlurOverlayEffect) {
-                this._qsBlurOverlayEffect.radius = blurRadius;
+            if (!this._transitionBlurReduced) {
+                this._overlayBlurBase = blurRadius;
+                this._applyOverlayBlurRadius();
             }
             this._cardBackings.forEach((backing) => {
                 if (backing && backing._liquidGlassCardBlur) {
@@ -356,6 +468,20 @@ export class QuickSettingsManager {
     // The list is keyed by root because callers sweep different subtrees
     // (targetActor for the menu, _stampActor for the popup); a single shared list
     // would let one sweep silently discard the other's targets.
+    // Releases the input mute GNOME applies while a popup animates closed. Safe
+    // to call when nothing is pending.
+    _flushPendingRestoreInput() {
+        if (this._pendingRestoreInputTimeoutId) {
+            GLib.source_remove(this._pendingRestoreInputTimeoutId);
+            this._pendingRestoreInputTimeoutId = 0;
+        }
+        const restore = this._pendingRestoreInput;
+        this._pendingRestoreInput = null;
+        try {
+            restore?.();
+        }
+        catch (e) { }
+    }
     _disableClippingRecursively(actor) {
         if (!actor)
             return;
@@ -531,6 +657,8 @@ export class QuickSettingsManager {
         }
         catch (e) { }
         this._cardBackings.delete(card);
+        this._cardLastGoodRect.delete(card);
+        this._cardBackingSnapshots.delete(card);
     }
     _setCardBackingsOpacity(opacity) {
         for (let backing of this._cardBackings.values()) {
@@ -639,6 +767,169 @@ export class QuickSettingsManager {
         let frames = Math.round(intervalMs / QS_ASSUMED_FRAME_MS);
         return Math.max(1, Math.min(30, frames));
     }
+    // Single BEFORE_REDRAW/idle hook shared by all deferred card work. Queuing
+    // through the compositor keeps heavy sync off the synchronous open path so
+    // the first frame can paint before backings/clones are built.
+    _addLaterOnce(callback) {
+        try {
+            if (global.compositor?.get_laters) {
+                global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, callback);
+                return;
+            }
+        }
+        catch (e) { }
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, callback);
+    }
+    // Coalesced backing sync: allocation bursts during open/layout collapse into
+    // one BEFORE_REDRAW sync instead of N synchronous full-tree syncs.
+    _requestCardBackingSyncCoalesced() {
+        if (this._cardSyncCoalescedPending)
+            return;
+        this._cardSyncCoalescedPending = true;
+        this._addLaterOnce(() => {
+            this._cardSyncCoalescedPending = false;
+            if (!this._isEffectActive)
+                return GLib.SOURCE_REMOVE;
+            try {
+                this._wakeCardBackingSync();
+            }
+            catch (e) { }
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+    // Coalesced card-effects re-apply for child-added/allocation bursts.
+    _requestCardEffectsCoalesced() {
+        if (this._cardEffectsCoalescedPending)
+            return;
+        this._cardEffectsCoalescedPending = true;
+        this._addLaterOnce(() => {
+            this._cardEffectsCoalescedPending = false;
+            if (!this._isEffectActive || !this.menu?.isOpen)
+                return GLib.SOURCE_REMOVE;
+            try {
+                this._applyCardEffects();
+                this._wakeCardBackingSync();
+            }
+            catch (e) { }
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+    // ---------------------------------------------------------------------
+    // Backdrop blur resolution
+    // ---------------------------------------------------------------------
+    // The blur radius the overlay would use if it were rendered at full size.
+    // This is the configured value, not the transition-reduced one: transitions
+    // trim the texel radius on top of the downscale (see
+    // _applyOverlayBlurRadius) instead of moving the base.
+    _overlayBlurRadiusBase() {
+        if (this._overlayBlurBase < 0)
+            this._overlayBlurBase = this._settings.get_int('quick-settings-blur-radius');
+        return this._overlayBlurBase;
+    }
+    // Splits a requested backdrop blur radius into the reduced-resolution radius
+    // to hand to Shell.BlurEffect plus the actor scale that puts it back to the
+    // requested size on screen. See QS_BLUR_FBO_DIVISOR: ShellBlurEffect reports
+    // the on-screen blur as radius * (screen size / allocation), so scaling the
+    // allocation down by k and the actor up by k needs radius/k, and deriving k
+    // from the radius keeps that exact when radius/k would not be an integer.
+    _blurDownscaleFor(baseRadius) {
+        let base = Math.round(baseRadius) || 0;
+        // Radius 1 is the smallest value the int property can hold, so there is
+        // nothing left to divide and the buffer has to stay full size.
+        if (base <= 1)
+            return { scale: 1, radius: Math.max(0, base) };
+        let radius = Math.max(1, Math.round(base / QS_BLUR_FBO_DIVISOR));
+        return { scale: base / radius, radius };
+    }
+    // Pushes the current radius / downscale factor onto the overlay. Called from
+    // the overlay build and from every path that changes the radius (the setting
+    // and the transition-reduced toggle).
+    _applyOverlayBlurRadius() {
+        let { scale, radius } = this._blurDownscaleFor(this._overlayBlurRadiusBase());
+        // A running transition halves the blur, but it must not undo the downscale:
+        // the offscreen buffer is what costs, its size does not shrink with the
+        // radius, and the transition is precisely when the frame budget is
+        // tightest. Trimming the texel radius keeps the reduced buffer in place and
+        // the on-screen blur simply halves with it.
+        if (this._transitionBlurReduced) {
+            if (radius > 1)
+                radius = Math.max(1, Math.floor(radius / 2));
+        }
+        this._blurFboScale = scale > 0 ? scale : 1;
+        this._blurFboRadius = radius;
+        try {
+            if (this._qsBlurOverlayEffect)
+                this._qsBlurOverlayEffect.radius = radius;
+            if (this._qsBlurHalfBox) {
+                this._qsBlurHalfBox.set_pivot_point(0, 0);
+                let inverse = 1 / this._blurFboScale;
+                this._qsBlurHalfBox.set_scale(inverse, inverse);
+            }
+        }
+        catch (e) { }
+        // Invalidate the memoized container geometry so the next sync re-applies
+        // the size and scale for the new factor instead of skipping them.
+        let geometry = this._qsBlurOverlay && this._qsBlurOverlay._liquidGlassGeometry;
+        if (geometry) {
+            geometry.fboW = -1;
+            geometry.fboH = -1;
+            geometry.fboScale = -1;
+        }
+    }
+    // Halves ACTOR blur radii while a transition runs; restores afterwards.
+    // Large-radius ACTOR blurs dominate the per-frame FBO cost, so this is the
+    // cheapest way to stay in frame budget under CPU/GPU pressure.
+    _setTransitionBlurReduced(reduced) {
+        if (this._transitionBlurReduced === reduced)
+            return;
+        this._transitionBlurReduced = reduced;
+        try {
+            let base = this._savedOverlayBlurRadius > 0
+                ? this._savedOverlayBlurRadius
+                : this._settings.get_int('quick-settings-blur-radius');
+            let half = Math.max(1, Math.floor(base / 2));
+            if (reduced) {
+                this._savedOverlayBlurRadius = base;
+                this._overlayBlurBase = base;
+                this._applyOverlayBlurRadius();
+                for (let backing of this._cardBackings.values()) {
+                    let blur = backing._liquidGlassCardBlur;
+                    if (blur) {
+                        backing._liquidSavedBlurRadius = blur.radius ?? base;
+                        blur.radius = half;
+                    }
+                }
+            }
+            else {
+                this._overlayBlurBase = base;
+                this._applyOverlayBlurRadius();
+                for (let backing of this._cardBackings.values()) {
+                    let blur = backing._liquidGlassCardBlur;
+                    if (blur)
+                        blur.radius = backing._liquidSavedBlurRadius ?? base;
+                }
+                this._savedOverlayBlurRadius = -1;
+            }
+        }
+        catch (e) { }
+    }
+    // Cached ThemeContext scale (500ms TTL) to avoid a GI round-trip per tick.
+    _themeScaleFactor() {
+        let now = GLib.get_monotonic_time();
+        if (now - this._cachedThemeScaleUs < 500_000 && this._cachedThemeScale > 0)
+            return this._cachedThemeScale;
+        let scale = 1;
+        try {
+            let themeContext = St.ThemeContext.get_for_stage(global.stage);
+            scale = themeContext.scale_factor ?? 1;
+        }
+        catch (e) { }
+        if (!(scale > 0))
+            scale = 1;
+        this._cachedThemeScale = scale;
+        this._cachedThemeScaleUs = now;
+        return scale;
+    }
     _getWindowActorsSignature(windowActors) {
         let parts = [];
         try {
@@ -657,6 +948,26 @@ export class QuickSettingsManager {
         catch (e) { }
         return parts.join('|');
     }
+    // True when a clone container's children are not already in the order the
+    // windows are stacked in.
+    //
+    // Clone order is paint order: the container draws its children in list order,
+    // and mutter keeps global.get_window_actors() in stacking order. Re-indexing
+    // only when the clone *set* changed meant a restack never moved anything, so
+    // whichever window was topmost when the clones were first built stayed on top
+    // of the glass no matter what the user raised over it. Comparing the desired
+    // order against the live children is O(n) and only pays for
+    // set_child_at_index when the stack actually moved.
+    _cloneOrderChanged(container, order, cloneMap) {
+        let children = container.get_children();
+        let i = 0;
+        for (let windowActor of order) {
+            if (children[i] !== cloneMap.get(windowActor))
+                return true;
+            i++;
+        }
+        return i !== children.length;
+    }
     _syncBackingWindowClones(backing, stageX, stageY, windowActors, rebuildChildren = true, clipRect = null) {
         let container = backing._liquidGlassWindowClonesContainer;
         let cloneMap = backing._liquidGlassWindowClones;
@@ -666,8 +977,17 @@ export class QuickSettingsManager {
             // Container geometry is cheap and always current, so the move-only path
             // (rebuildChildren === false) stays correct: every clone child shifts
             // with the container.
-            container.set_position(-stageX, -stageY);
-            container.set_scale(1.0, 1.0);
+            let state = backing._liquidGlassWindowCloneState || {};
+            let containerX = -stageX;
+            let containerY = -stageY;
+            if (state.x !== containerX || state.y !== containerY)
+                container.set_position(containerX, containerY);
+            if (state.scale !== 1.0)
+                container.set_scale(1.0, 1.0);
+            state.x = containerX;
+            state.y = containerY;
+            state.scale = 1.0;
+            backing._liquidGlassWindowCloneState = state;
             if (!rebuildChildren) {
                 // Cheap path: leave the clone children untouched. The caller has
                 // already established that the visible window set is unchanged.
@@ -709,6 +1029,9 @@ export class QuickSettingsManager {
             }
             for (let [windowActor, clone] of Array.from(cloneMap.entries())) {
                 if (!activeWindows.has(windowActor)) {
+                    // DEV-PROBE-START
+                    bump('cloneDestroy');
+                    // DEV-PROBE-END
                     try {
                         clone.destroy();
                     }
@@ -717,14 +1040,18 @@ export class QuickSettingsManager {
                     zOrderDirty = true;
                 }
             }
-            // z-order is only re-indexed when the clone set actually changed; doing it
-            // unconditionally dirties the paint order and forces a relayout.
-            if (zOrderDirty) {
+            // z-order is re-indexed when the clone set changed *or* when the stack
+            // order did; doing it unconditionally dirties the paint order and forces a
+            // relayout on every rebuild.
+            if (zOrderDirty || this._cloneOrderChanged(container, activeWindows, cloneMap)) {
                 let index = 0;
                 for (let windowActor of activeWindows) {
                     let clone = cloneMap.get(windowActor);
                     if (!clone)
                         continue;
+                    // DEV-PROBE-START
+                    bump('cloneIndex');
+                    // DEV-PROBE-END
                     try {
                         container.set_child_at_index(clone, index);
                     }
@@ -741,8 +1068,16 @@ export class QuickSettingsManager {
     // moved. `frameWindowActors` lets the animation tick reuse one snapshot of
     // global.get_window_actors() instead of re-fetching it per sync.
     _syncCardBackings(skipWindowClones = false, rebuildWindowClones = !skipWindowClones, frameWindowActors = null) {
+        // DEV-PROBE-START
+        bump('backingSync');
+        if (rebuildWindowClones)
+            bump('backingSyncRebuild');
+        // DEV-PROBE-END
         if (!this.menu?.actor?.mapped && !this._isAnimating)
             return;
+        // DEV-PROBE-START
+        bump('windowActors');
+        // DEV-PROBE-END
         let windowActors = frameWindowActors ?? global.get_window_actors();
         let parent = this.menu?.actor?.get_parent?.() || Main.layoutManager.uiGroup;
         // Recomputed once per sync. Acting as the tick's frame token, it also
@@ -767,12 +1102,11 @@ export class QuickSettingsManager {
             try {
                 let [x, y] = card.get_transformed_position();
                 let [w, h] = card.get_size();
-                // While the spring open animation is running, the backing geometry is
-                // frozen at the layout that was captured once the menu settled. This
-                // masks transient reflows (native menu parts being collapsed) and any
-                // brief non-identity ancestor scale so the glass never visibly shrinks
-                // mid-fade. Live geometry takes over again once the animation ends.
-                let snapshot = this._cardBackingsFrozen
+                // Frozen geometry is for a *hidden, static* menu only (the submenu
+                // hand-off). While the stamp is running the glass must be measured live
+                // on every frame: pinning it to a captured rect is what left the icons
+                // sitting outside their liquid glass until the animation ended.
+                let snapshot = (this._cardBackingsFrozen && !this._isAnimating)
                     ? this._cardBackingSnapshots.get(card)
                     : null;
                 if (snapshot) {
@@ -785,6 +1119,30 @@ export class QuickSettingsManager {
                     Number.isNaN(x) || Number.isNaN(y) ||
                     Number.isNaN(w) || Number.isNaN(h) ||
                     w <= 2 || h <= 2) {
+                    // Transient reflow grace: a card (usually a borrowed slider) can
+                    // report 0-size for a frame while layout settles. Reuse its last
+                    // good backing geometry a few frames instead of hiding, so the
+                    // glass never flashes missing. Frozen snapshots already cover the
+                    // submenu handoff; this covers live reflows after unfreeze.
+                    let grace = this._cardLastGoodRect.get(card);
+                    if (grace && grace.framesLeft > 0 && backing.get_parent()) {
+                        grace.framesLeft--;
+                        try {
+                            backing.show();
+                            backing.opacity = grace.opacity;
+                            backing.set_position(grace.x, grace.y);
+                            backing.set_size(grace.w, grace.h);
+                            backing.set_scale(grace.sx, grace.sy);
+                        }
+                        catch (e) {
+                            try {
+                                backing.hide();
+                            }
+                            catch (e2) { }
+                        }
+                        continue;
+                    }
+                    this._cardLastGoodRect.delete(card);
                     backing.hide();
                     continue;
                 }
@@ -808,7 +1166,8 @@ export class QuickSettingsManager {
                 rect.w = w + reach * 2;
                 rect.h = h + reach * 2;
                 rectCount++;
-                backing.show();
+                if (!backing.visible)
+                    backing.show();
                 // Calculate the true effective opacity by synchronously multiplying up the actor tree
                 let effectiveOpacity = 255;
                 if (typeof card.get_paint_opacity === 'function') {
@@ -880,26 +1239,63 @@ export class QuickSettingsManager {
                     sourceStageX -= QS_CARD_SHADER_PADDING;
                     sourceStageY -= QS_CARD_SHADER_PADDING;
                 }
-                backing.opacity = Math.round(effectiveOpacity);
-                backing.set_position(backingX, backingY);
-                backing.set_size(unscaledW, unscaledH);
-                backing.set_scale(effectiveScale / trackingScale, effectiveScale / trackingScale);
+                let backingOpacity = Math.round(effectiveOpacity);
+                let backingScale = effectiveScale / trackingScale;
+                let geometry = backing._liquidGlassGeometry || {};
+                if (geometry.opacity !== backingOpacity)
+                    backing.opacity = backingOpacity;
+                if (geometry.x !== backingX || geometry.y !== backingY)
+                    backing.set_position(backingX, backingY);
+                if (geometry.w !== unscaledW || geometry.h !== unscaledH)
+                    backing.set_size(unscaledW, unscaledH);
+                if (geometry.scale !== backingScale)
+                    backing.set_scale(backingScale, backingScale);
+                geometry.x = backingX;
+                geometry.y = backingY;
+                geometry.w = unscaledW;
+                geometry.h = unscaledH;
+                geometry.scale = backingScale;
+                geometry.opacity = backingOpacity;
+                backing._liquidGlassGeometry = geometry;
+                // Remember the applied geometry for the transient-reflow grace above.
+                this._cardLastGoodRect.set(card, {
+                    x: backingX, y: backingY, w: unscaledW, h: unscaledH,
+                    sx: effectiveScale / trackingScale, sy: effectiveScale / trackingScale,
+                    opacity: Math.round(effectiveOpacity), framesLeft: 3,
+                });
                 let clipBox = backing._liquidGlassClipBox;
                 let fboContainer = backing._liquidGlassFboContainer;
                 let bgClone = backing._liquidGlassBgClone;
                 if (ENABLE_QS_CARD_SHADER && clipBox && fboContainer && bgClone) {
-                    clipBox.set_position(0, 0);
-                    clipBox.set_size(unscaledW, unscaledH);
-                    fboContainer.set_scale(1.0, 1.0);
-                    fboContainer.set_position(0, 0);
-                    fboContainer.set_size(unscaledW, unscaledH);
-                    bgClone.set_scale(1.0, 1.0);
-                    bgClone.set_position(-sourceStageX, -sourceStageY);
-                    bgClone.show();
+                    if (geometry.clipW !== unscaledW || geometry.clipH !== unscaledH) {
+                        clipBox.set_size(unscaledW, unscaledH);
+                        fboContainer.set_size(unscaledW, unscaledH);
+                        geometry.clipW = unscaledW;
+                        geometry.clipH = unscaledH;
+                    }
+                    if (!geometry.fboInitialized) {
+                        clipBox.set_position(0, 0);
+                        fboContainer.set_scale(1.0, 1.0);
+                        fboContainer.set_position(0, 0);
+                        bgClone.set_scale(1.0, 1.0);
+                        geometry.fboInitialized = true;
+                    }
+                    let bgX = -sourceStageX;
+                    let bgY = -sourceStageY;
+                    if (geometry.bgX !== bgX || geometry.bgY !== bgY)
+                        bgClone.set_position(bgX, bgY);
+                    if (!bgClone.visible)
+                        bgClone.show();
+                    geometry.bgX = bgX;
+                    geometry.bgY = bgY;
                     // Window clones last changed on the frame that captured their
                     // positions, so most animation ticks only move the container while
-                    // the children (built in source-window coordinates) ride along.
-                    this._syncBackingWindowClones(backing, sourceStageX, sourceStageY, windowActors, !skipWindowClones && rebuildWindowClones, projectionIsIdentity ? rect : null);
+                    // the children (built in source-window coordinates) ride along. A
+                    // backing with no clones yet (newly created) always rebuilds, so a
+                    // consumed throttle budget can never leave glass permanently empty.
+                    let backingClones = backing._liquidGlassWindowClones;
+                    let backingNeedsBuild = (!backingClones || backingClones.size === 0) && windowActors.length > 0;
+                    this._syncBackingWindowClones(backing, sourceStageX, sourceStageY, windowActors, (!skipWindowClones && rebuildWindowClones) || backingNeedsBuild, projectionIsIdentity ? rect : null);
                 }
                 // Style classes only change when a card is re-classified, which
                 // happens on notify::allocation. Compare against the key this frame
@@ -1037,6 +1433,42 @@ export class QuickSettingsManager {
             return null;
         }
     }
+    // Change token for the window set the whole-menu backdrop clones. Unlike
+    // _getCardBackingSignature this is evaluated on every idle tick, so it only
+    // looks at the windows and only records what the clone sync actually consumes.
+    // The order of the entries is significant: the clone container paints its
+    // children in list order, so a restack has to invalidate the token even though
+    // every window keeps its geometry.
+    //
+    // The visible/mapped flags are the point of the whole thing: mutter hides
+    // (unmaps) window actors that leave the active workspace, and the clone sync
+    // drops those windows. Keying on geometry alone would leave the previous
+    // workspace's windows latched behind the menu after a workspace switch.
+    _backdropWindowSignature(windowActors = null) {
+        let parts = [];
+        try {
+            for (let windowActor of (windowActors ?? global.get_window_actors())) {
+                let metaWindow = windowActor.get_meta_window?.();
+                if (!metaWindow)
+                    continue;
+                parts.push([
+                    metaWindow.minimized ? 1 : 0,
+                    windowActor.visible ? 1 : 0,
+                    windowActor.mapped ? 1 : 0,
+                    Math.round(windowActor.x),
+                    Math.round(windowActor.y),
+                    Math.round(windowActor.width),
+                    Math.round(windowActor.height),
+                    Math.round(windowActor.scale_x * 1000),
+                    Math.round(windowActor.scale_y * 1000),
+                    Math.round(windowActor.translation_x),
+                    Math.round(windowActor.translation_y),
+                ].join(','));
+            }
+        }
+        catch (e) { }
+        return parts.join('|');
+    }
     _getCardBackingSignature() {
         let parts = [];
         try {
@@ -1076,6 +1508,17 @@ export class QuickSettingsManager {
         return parts.join('|');
     }
     _wakeCardBackingSync() {
+        // During the return entrance the ease owns per-frame syncs (move-only).
+        // Keep the idle timer stopped: animating opacity would defeat its idle
+        // detection and trigger full clone rebuilds every frame. Stray wakes
+        // during the ease only re-sync geometry.
+        if (this._revealEaseGen !== 0) {
+            try {
+                this._syncCardBackings(false, false);
+            }
+            catch (e) { }
+            return;
+        }
         this._cardBackingIdleMode = false;
         if (this._cardBackingSyncId !== 0) {
             this._syncCardBackings();
@@ -1103,6 +1546,19 @@ export class QuickSettingsManager {
             if (this._isAnimating) {
                 return GLib.SOURCE_CONTINUE;
             }
+            // Cheap window-set token, checked on every 16ms tick *before* the interval
+            // gate so it also runs in idle mode: a restack or a workspace switch has to
+            // reach the backdrop within a frame, not after the 750ms idle interval.
+            // Leaving idle mode as well makes the next tick re-sync the card backings,
+            // which clone the same windows.
+            if (this._backdropWindowSignature() !== this._qsBlurCloneSig) {
+                this._cardBackingIdleMode = false;
+                this._cardBackingStableFrames = 0;
+                try {
+                    this._syncBlurOverlayGeometry(null, false);
+                }
+                catch (e) { }
+            }
             let now = GLib.get_monotonic_time();
             let intervalUs = this._cardBackingIdleMode ? idleIntervalUs : activeIntervalUs;
             if (lastSyncTime !== 0 && now - lastSyncTime < intervalUs) {
@@ -1125,10 +1581,17 @@ export class QuickSettingsManager {
             return GLib.SOURCE_CONTINUE;
         };
         this._syncCardBackings();
+        // Same reason as the tick above: the backdrop has to be showing the real
+        // windows on the frame the menu appears, before the first 16ms tick runs.
+        // Move-only, so this costs nothing unless the window set actually changed.
+        try {
+            this._syncBlurOverlayGeometry(null, false);
+        }
+        catch (e) { }
         this._cardBackingLastSignature = this._getCardBackingSignature();
         this._cardBackingSyncId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, syncTick);
     }
-    _stopCardBackingSync() {
+    _stopCardBackingSync(keepFrozen = false) {
         if (this._cardBackingSyncId !== 0) {
             GLib.source_remove(this._cardBackingSyncId);
             this._cardBackingSyncId = 0;
@@ -1136,11 +1599,17 @@ export class QuickSettingsManager {
         this._cardBackingIdleMode = false;
         this._cardBackingStableFrames = 0;
         this._cardBackingLastSignature = '';
-        this._unfreezeCardBackings();
+        // Submenu handoffs keep the frozen snapshot alive (the return path renders
+        // it); every other path resumes live tracking.
+        if (!keepFrozen)
+            this._unfreezeCardBackings();
     }
-    // Snapshot each card's size/position/scale once the opened menu has settled
-    // so _syncCardBackings can render stable glass during the spring fade.
-    _captureCardBackingGeometry() {
+    // Lightweight freeze for submenu handoffs: records each card's settled
+    // geometry WITHOUT running a full _syncCardBackings (which would rebuild
+    // every card's window clones on the click path). The backings and their
+    // clones stay alive; _syncCardBackings renders the snapshot while frozen,
+    // so the return reveal paints exact glass on the first frame.
+    _freezeCardBackingsSnapshot() {
         if (!this.menu?.actor?.mapped)
             return false;
         let parent = this.menu?.actor?.get_parent?.() || Main.layoutManager.uiGroup;
@@ -1170,37 +1639,17 @@ export class QuickSettingsManager {
             return false;
         this._cardBackingSnapshots = snapshot;
         this._cardBackingsFrozen = true;
-        this._syncCardBackings();
         return true;
     }
+    // NOTE: there is deliberately no "capture mid-animation and pin the glass"
+    // path here any more. Pinning each card's settled rect while the stamp was
+    // still scaling the content is exactly what made the icons sit outside their
+    // liquid glass for the whole open and then snap at the end. The snapshot map
+    // below is now only ever used for a *hidden, static* menu (the submenu
+    // hand-off), never while the stamp is running.
     _unfreezeCardBackings() {
         this._cardBackingsFrozen = false;
         this._cardBackingSnapshots.clear();
-    }
-    // Defer the freeze a couple of BEFORE_REDRAW passes so the initial reflow
-    // (native menu parts collapsed to 0x0, custom arrows, label constraints)
-    // finishes before the backing geometry is pinned down.
-    _scheduleCardBackingFreeze() {
-        this._unfreezeCardBackings();
-        let addLater = (callback) => {
-            try {
-                if (global.compositor?.get_laters)
-                    return global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, callback);
-            }
-            catch (e) { }
-            return GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, callback);
-        };
-        let capture = () => {
-            if (this._isEffectActive && this._isAnimating && this.menu?.actor?.mapped)
-                this._captureCardBackingGeometry();
-            return GLib.SOURCE_REMOVE;
-        };
-        // Frame 1: layout applies the compact reflow. Frame 2: capture + freeze.
-        let first = () => {
-            addLater(capture);
-            return GLib.SOURCE_REMOVE;
-        };
-        addLater(first);
     }
     _disconnectDrilldown(card) {
         let signalItems = this._drilldownSignalIds.get(card);
@@ -1218,6 +1667,16 @@ export class QuickSettingsManager {
     }
     _showMenuToggleContent(card) {
         let stCard = card;
+        // GNOME 51 sliders (volume / brightness / input) are QuickSlider subclasses
+        // whose menus are opened by their own _iconButton and by a 'popup-menu'
+        // signal on the inner slider -- not by anything we can rewire here. They
+        // also have no title, so the submenu classifier below can never match them.
+        // Leave them entirely native so the stock sound-output menu keeps working.
+        if (stCard?.has_style_class_name?.('quick-slider'))
+            return;
+        // Default to keeping the native button; _connectMenuToggleDrilldown
+        // clears this only for cards it actually takes over.
+        stCard._liquidGlassKeepNativeMenuButton = true;
         for (let actor of [stCard._customToggle, stCard.button, stCard._box]) {
             try {
                 if (actor) {
@@ -1229,10 +1688,17 @@ export class QuickSettingsManager {
             catch (e) { }
         }
         this._hideNativeMenuPart(stCard._separator);
-        this._hideNativeMenuPart(stCard._menuButton || stCard._arrow || stCard._menuButtonActor);
+        // GNOME 51 wires the submenu to _menuButton ('clicked' -> menu.open()).
+        // Hiding it without a working replacement leaves the card with no way to
+        // open its menu, so only hide it once the drill-down is actually wired.
+        const nativeMenuBtn = stCard._menuButton || stCard._arrow || stCard._menuButtonActor;
+        if (!stCard._liquidGlassKeepNativeMenuButton)
+            this._hideNativeMenuPart(nativeMenuBtn);
         stCard.add_style_class_name?.('liquid-glass-menu-toggle-has-arrow');
         this._prepareMenuToggleLabels(card);
-        this._ensureCustomMenuArrow(card);
+        // Don't draw LG's custom arrow on top of a native button we kept.
+        if (!stCard._liquidGlassKeepNativeMenuButton)
+            this._ensureCustomMenuArrow(card);
     }
     _prepareMenuToggleLabels(card) {
         let labels = [];
@@ -1553,11 +2019,24 @@ export class QuickSettingsManager {
     }
     _connectMenuToggleDrilldown(card) {
         let stCard = card;
-        if (!(stCard?.menu || stCard?._menu) || stCard._liquidGlassDrilldownConnected)
+        // Native sliders own their menu wiring (see _showMenuToggleContent).
+        // Never attach a drill-down to them.
+        if (stCard?.has_style_class_name?.('quick-slider'))
             return;
+        if (!(stCard?.menu || stCard?._menu))
+            return;
+        if (stCard._liquidGlassDrilldownConnected) {
+            // Already wired on an earlier reflow; keep the same decision so repeated
+            // reflows don't flip the native button back on.
+            stCard._liquidGlassKeepNativeMenuButton = false;
+            return;
+        }
         let submenuKind = this._getCustomSubmenuKind(card);
         if (!submenuKind)
             return;
+        // This card now has a working LG replacement, so the native button can be
+        // hidden. Cards that bail out above keep theirs.
+        stCard._liquidGlassKeepNativeMenuButton = false;
         let signalItems = [];
         let openDetails = () => {
             let now = GLib.get_monotonic_time();
@@ -1797,54 +2276,80 @@ export class QuickSettingsManager {
         };
         let newCardSet = new Set(cards);
         for (let oldCard of Array.from(this._cardActors)) {
-            if (!newCardSet.has(oldCard)) {
+            if (newCardSet.has(oldCard))
+                continue;
+            // The walk above is visibility-dependent -- collectCards() bails on any
+            // actor that is not `visible` -- and this runs on every open, including
+            // while the menu is still hidden. A card the walk could not see this pass
+            // has therefore *not* necessarily left the menu, and treating it as gone
+            // destroyed every glass backing between opens (then rebuilt them on the
+            // next open, which is the stall this rewrite exists to remove). Only a
+            // card that really left the menu tree is pruned.
+            if (!this._isInMenuTree(oldCard)) {
                 removeCardActor(oldCard);
             }
         }
+        // Shape classes are applied by diffing instead of by blindly stripping all
+        // six and re-adding one. Every add_style_class_name/remove_style_class_name
+        // dirties the widget's theme node, and a dirty theme node is re-resolved
+        // during the next layout/style pass -- which for a popup with 14 cards and
+        // borrowed sliders showed up as a 70-100ms frame right after the call.
+        // With the diff, a card whose shape did not change costs nothing.
+        const SHAPE_CLASSES = [
+            'liquid-glass-card-toggle',
+            'liquid-glass-card-slider',
+            'liquid-glass-card-circle',
+            'liquid-glass-card-squircle',
+            'liquid-glass-card-pill',
+            'liquid-glass-card-rect',
+            'liquid-glass-card-compact',
+        ];
+        let applyShapeClasses = (stCard, desired) => {
+            let wanted = new Set(desired);
+            for (let className of SHAPE_CLASSES) {
+                let has = !!stCard.has_style_class_name?.(className);
+                let want = wanted.has(className);
+                if (want && !has)
+                    stCard.add_style_class_name?.(className);
+                else if (!want && has)
+                    stCard.remove_style_class_name?.(className);
+            }
+        };
         let classifyCard = (card) => {
             let stCard = card;
-            for (let className of [
-                'liquid-glass-card-toggle',
-                'liquid-glass-card-slider',
-                'liquid-glass-card-circle',
-                'liquid-glass-card-pill',
-                'liquid-glass-card-rect',
-                'liquid-glass-card-compact',
-            ]) {
-                stCard.remove_style_class_name?.(className);
-            }
             let [w, h] = card.get_size();
             let aspect = h > 0 ? w / h : 1;
             let isMenuToggle = hasNativeMenu(stCard);
             let isSimpleToggle = hasClass(card, 'quick-toggle') && !isMenuToggle;
+            let desired = [];
             if (isSliderActor(card)) {
-                stCard.add_style_class_name?.('liquid-glass-card-slider');
-                stCard.add_style_class_name?.('liquid-glass-card-pill');
+                desired.push('liquid-glass-card-slider', 'liquid-glass-card-pill');
             }
             else if (hasClass(card, 'liquid-glass-custom-card-squircle')) {
-                stCard.add_style_class_name?.('liquid-glass-card-squircle');
+                desired.push('liquid-glass-card-squircle');
             }
             else if (isSimpleToggle) {
-                stCard.add_style_class_name?.('liquid-glass-card-circle');
+                desired.push('liquid-glass-card-circle');
             }
             else if (isMenuToggle) {
-                stCard.add_style_class_name?.('liquid-glass-card-rect');
+                desired.push('liquid-glass-card-rect');
             }
             else if (card instanceof St.Button && (Math.abs(w - h) <= 16 || (w <= 70 && h <= 70))) {
-                stCard.add_style_class_name?.('liquid-glass-card-circle');
+                desired.push('liquid-glass-card-circle');
             }
             else if (aspect >= 2.6 || h <= 48) {
-                stCard.add_style_class_name?.('liquid-glass-card-pill');
+                desired.push('liquid-glass-card-pill');
             }
             else {
-                stCard.add_style_class_name?.('liquid-glass-card-rect');
+                desired.push('liquid-glass-card-rect');
             }
-            if (h > 0 && h <= 52) {
-                stCard.add_style_class_name?.('liquid-glass-card-compact');
-            }
+            if (h > 0 && h <= 52)
+                desired.push('liquid-glass-card-compact');
+            applyShapeClasses(stCard, desired);
         };
         for (let card of cards) {
             let stCard = card;
+            let wasKnownCard = this._cardActors.has(card);
             if (!stCard.has_style_class_name || !stCard.has_style_class_name('liquid-glass-card')) {
                 try {
                     if (stCard.add_style_class_name) {
@@ -1856,14 +2361,24 @@ export class QuickSettingsManager {
                 }
             }
             classifyCard(card);
-            classifyCard(card);
+            // Record the classified size so the allocation handler below can skip
+            // re-classifying on reflows that report identical sizes.
+            try {
+                let [caw, cah] = card.get_size();
+                stCard._liquidGlassClassifiedW = Math.round(caw);
+                stCard._liquidGlassClassifiedH = Math.round(cah);
+            }
+            catch (e) { }
             if (hasNativeMenu(stCard)) {
                 try {
                     let stCard = card;
                     if (hasNativeMenu(stCard)) {
                         try {
-                            this._showMenuToggleContent(card);
+                            // Order matters: the drilldown decides whether LG takes
+                            // over the card (and therefore whether the native menu
+                            // button may be hidden).
                             this._connectMenuToggleDrilldown(card);
+                            this._showMenuToggleContent(card);
                         }
                         catch (e) { }
                     }
@@ -1873,14 +2388,37 @@ export class QuickSettingsManager {
             try {
                 if (!stCard._liquidGlassCardAllocationId) {
                     stCard._liquidGlassCardAllocationId = card.connect('notify::allocation', () => {
-                        classifyCard(card);
-                        this._wakeCardBackingSync();
+                        // Reflow fires allocation repeatedly, often with identical or
+                        // transient sizes; re-classifying each time flaps shape classes
+                        // (circle vs pill vs rect) mid-animation. Only re-classify when
+                        // the rounded size actually changed.
+                        try {
+                            let [caw, cah] = card.get_size();
+                            let rw = Math.round(caw), rh = Math.round(cah);
+                            if (stCard._liquidGlassClassifiedW !== rw || stCard._liquidGlassClassifiedH !== rh) {
+                                stCard._liquidGlassClassifiedW = rw;
+                                stCard._liquidGlassClassifiedH = rh;
+                                classifyCard(card);
+                            }
+                        }
+                        catch (e) {
+                            classifyCard(card);
+                        }
+                        // Allocation bursts (open/layout settle) share one deferred sync
+                        // instead of each running a full _syncCardBackings synchronously.
+                        this._requestCardBackingSyncCoalesced();
                     });
                 }
             }
             catch (e) { }
             this._cardActors.add(card);
             this._getOrCreateCardBacking(card);
+            // A card that was not here before means the popup tree grew, so the clip
+            // sweep recorded for this root is now incomplete. Invalidating it lets
+            // the post-open sweep replay a complete list instead of re-walking the
+            // whole popup on the frame right after the menu opens.
+            if (!wasKnownCard)
+                this._clipTargetsByRoot.delete(this.targetActor);
             if (stCard._checkedSignals) {
                 for (let item of stCard._checkedSignals) {
                     try {
@@ -1902,7 +2440,7 @@ export class QuickSettingsManager {
                         if (stCard.remove_style_class_name)
                             stCard.remove_style_class_name('checked');
                     }
-                    this._wakeCardBackingSync();
+                    this._requestCardBackingSyncCoalesced();
                     // Force button inline styles to refresh after checked state change
                     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
                         this._updateButtonAlpha();
@@ -1923,16 +2461,14 @@ export class QuickSettingsManager {
         if (targetLayoutBox) {
             if (!targetLayoutBox._childAddedId) {
                 targetLayoutBox._childAddedId = targetLayoutBox.connect('child-added', (parent, child) => {
-                    this._applyCardEffects();
-                    this._wakeCardBackingSync();
+                    this._requestCardEffectsCoalesced();
                 });
             }
             for (let child of mainBoxChildren) {
                 let isGrid = (child.constructor && child.constructor.name.includes('Grid')) || (child.has_style_class_name && child.has_style_class_name('quick-settings-grid'));
                 if (isGrid && !child._gridChildAddedId) {
                     child._gridChildAddedId = child.connect('child-added', (parent, gridChild) => {
-                        this._applyCardEffects();
-                        this._wakeCardBackingSync();
+                        this._requestCardEffectsCoalesced();
                     });
                 }
             }
@@ -2087,11 +2623,24 @@ export class QuickSettingsManager {
             this._qsBlurOverlay.add_child(qsClipBox);
             let qsFboContainer = new UnpickableActor();
             qsFboContainer.set_size(2, 2);
+            qsFboContainer.set_pivot_point(0, 0);
             qsClipBox.add_child(qsFboContainer);
+            // Reduced-resolution blur: ShellBlurEffect allocates its offscreen buffer
+            // at the actor's own allocation, so the buffer is the size of whatever
+            // qsFboContainer is allocated at. Everything inside qsHalfBox is drawn at
+            // 1/k to fit the whole menu-sized source into that smaller buffer, and
+            // qsFboContainer's own scale of k puts the blurred result back at full
+            // size. The mask below stays outside both, so it is still evaluated per
+            // physical pixel and the feathered corners keep their full-resolution
+            // accuracy. See QS_BLUR_FBO_DIVISOR.
+            let qsHalfBox = new UnpickableActor();
+            qsHalfBox.set_pivot_point(0, 0);
+            qsHalfBox.set_scale(1, 1);
+            qsFboContainer.add_child(qsHalfBox);
             let qsBgClone = new UnpickableClone({ source: Main.layoutManager._backgroundGroup });
-            qsFboContainer.add_child(qsBgClone);
+            qsHalfBox.add_child(qsBgClone);
             let qsWindowClonesContainer = new UnpickableActor();
-            qsFboContainer.add_child(qsWindowClonesContainer);
+            qsHalfBox.add_child(qsWindowClonesContainer);
             this._qsBlurOverlayEffect = new Shell.BlurEffect({
                 radius: this._settings.get_int('quick-settings-blur-radius'),
                 mode: Shell.BlurMode.ACTOR,
@@ -2104,9 +2653,13 @@ export class QuickSettingsManager {
             this._qsBlurMask = mask;
             this._qsBlurClipBox = qsClipBox;
             this._qsBlurFboContainer = qsFboContainer;
+            this._qsBlurHalfBox = qsHalfBox;
             this._qsBlurBgClone = qsBgClone;
             this._qsBlurWindowClonesContainer = qsWindowClonesContainer;
             this._qsBlurWindowClones = new Map();
+            // Replace the raw setting above with the reduced-resolution radius and
+            // the matching counter-scale on qsHalfBox.
+            this._applyOverlayBlurRadius();
             this._qsBlurOverlay.hide();
             // Insert as a sibling directly below the menu (same as the card backings)
             // so it sits right behind the menu instead of being buried at the bottom
@@ -2136,6 +2689,9 @@ export class QuickSettingsManager {
             }
         };
         this._signals = [];
+        // The stamp driver is created here, alongside the glass it has to keep in
+        // sync. It owns the open/close frame loop from now on.
+        this._createAnimation();
         this._animSignalId = this.menu.connect('open-state-changed', (menu, isOpen) => {
             if (isOpen) {
                 for (let button of this._findAllButtons(this.menu?.actor)) {
@@ -2145,26 +2701,9 @@ export class QuickSettingsManager {
                 }
                 if (!this._customQuickSettings)
                     this._customQuickSettings = new CustomQuickSettingsRenderer(this);
+                // Mount is synchronous: it builds the visible content, so the menu
+                // never flashes the native grid for a frame.
                 this._customQuickSettings.mount();
-                // Apply separately-styled glass card backgrounds to each layout block
-                this._applyCardEffects();
-                this._startCardBackingSync();
-                // Recursively disable clip_to_allocation immediately
-                this._disableClippingRecursively(this.targetActor);
-                // One short sweep catches lazy widgets without visibly reflowing the menu in passes.
-                for (let delay of [80]) {
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
-                        if (this._isEffectActive && this.menu.isOpen) {
-                            // Replay the sweep taken at open time; lazy widgets added since are
-                            // covered by the next full sweep on the following open.
-                            this._applyClipTargetsFor(this.targetActor);
-                            // Also ensure card effects are applied to any lazy loaded widgets
-                            this._applyCardEffects();
-                            this._wakeCardBackingSync();
-                        }
-                        return GLib.SOURCE_REMOVE;
-                    });
-                }
                 this._stableBaseW = undefined;
                 this._stableBaseH = undefined;
                 startFrameSync();
@@ -2185,7 +2724,39 @@ export class QuickSettingsManager {
                 }
                 catch (e) { }
                 this._applyMenuOffsets();
-                this._startAnimation(1);
+                // Build the card glass synchronously so backings exist before the popup
+                // is shown, then start the stamp. Both happen before BoxPointer.open(),
+                // so the first frame that reaches the screen is already glassed and
+                // already stamped.
+                try {
+                    this._applyCardEffects();
+                    this.animActor.queue_relayout?.();
+                }
+                catch (e) { }
+                this._beginOpenStamp();
+                // Deferred heavy work: backing sync loop and the recursive clip sweep.
+                // Runs on the next BEFORE_REDRAW so it never blocks the synchronous
+                // open → first-paint path.
+                this._addLaterOnce(() => {
+                    if (!this._isEffectActive || !this.menu?.isOpen)
+                        return GLib.SOURCE_REMOVE;
+                    try {
+                        this._startCardBackingSync();
+                        // Replay the recorded sweep (a full re-walk when the tree grew --
+                        // see _applyCardEffects) instead of unconditionally walking the
+                        // whole popup on the frame right after the menu opens.
+                        this._applyClipTargetsFor(this.targetActor);
+                    }
+                    catch (e) { }
+                    return GLib.SOURCE_REMOVE;
+                });
+                // Late sweep for widgets the shell adds lazily (a device appearing, an
+                // extension contributing a tile). It is deliberately NOT scheduled
+                // inside the stamp: replaying the sweep re-validates style and
+                // clip state across the whole popup, and the frame that pays for that
+                // is the frame right after -- which used to land mid-animation as an
+                // 70-100ms stutter. Run it once the transition has settled instead.
+                this._scheduleLateClipSweep();
                 return;
             }
             if (this._suppressNextCloseAnimation) {
@@ -2197,10 +2768,14 @@ export class QuickSettingsManager {
             this._applyMenuOffsets();
             for (let delay of [250, 700]) {
                 GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
-                    // Don't destroy card effects if we're mid-submenu transition — they'll be needed when QS reopens
-                    if (!this.menu?.isOpen && !this._isSubmenuTransitioning) {
-                        this._setCardBackingsOpacity(0);
-                        this._removeCardEffects();
+                    // Backstop only: the normal path is _onAnimationSettled(). If the
+                    // popup was dismissed without our fade running (the shell hid it, an
+                    // extension popped it down, ...) make sure no glass is left on screen.
+                    // Never fires mid-fade, and never destroys the backings -- rebuilding
+                    // 14 of them (with their shader effects) on the next open is what made
+                    // the open frame stall.
+                    if (!this.menu?.isOpen && !this._isSubmenuTransitioning && !this._isAnimating) {
+                        this._hideCardBackings();
                         this._stopCardBackingSync();
                     }
                     return GLib.SOURCE_REMOVE;
@@ -2212,7 +2787,19 @@ export class QuickSettingsManager {
             // If this is a normal close (not suppressed for submenu), clear the
             // transitioning flag so delayed timeouts and notify::mapped work normally.
             this._isSubmenuTransitioning = false;
-            this._startAnimation(0);
+            // Cancel any in-flight submenu-return entrance so its ease and tracking
+            // frames can't fight the close fade.
+            this._revealEaseGen = 0;
+            try {
+                this.menu.actor.remove_all_transitions?.();
+                this.animActor.remove_all_transitions();
+                this._stampActor?.remove_all_transitions?.();
+                this._qsBlurOverlay?.remove_all_transitions?.();
+            }
+            catch (e) { }
+            // Fade the popup out. The stamp leaves the scale alone on close; only the
+            // opacity moves, and the glass follows it frame for frame.
+            this._anim?.start(false);
         });
         // メニューの表示状態（mapped）が変わった時のシグナルを監視
         this._signals.push({
@@ -2228,9 +2815,10 @@ export class QuickSettingsManager {
                     stopFrameSync();
                     // Skip cleanup if we're transitioning to/from a submenu — QS will reopen shortly
                     if (!this._isSubmenuTransitioning) {
-                        // Immediately clean up card effects and backings to prevent persistence artifacts
-                        this._setCardBackingsOpacity(0);
-                        this._removeCardEffects();
+                        // Take the glass off screen, but keep it: the backings and their
+                        // shader effects are what the next open would otherwise rebuild
+                        // synchronously, and that rebuild is what stalled the open frame.
+                        this._hideCardBackings();
                         this._stopCardBackingSync();
                         // 念押しで確実にお掃除しておく
                         if (this.animActor) {
@@ -2285,13 +2873,26 @@ export class QuickSettingsManager {
     }
     // Syncs the overlay's window clones so the ACTOR-mode blur shows the live
     // windows behind the menu. Mirrors _syncBackingWindowClones (card backings).
-    _syncQsBlurOverlayWindowClones(stageX, stageY, frameWindowActors = null) {
+    // When rebuildChildren is false only the container moves; children ride
+    // along untouched (used on animation ticks after the first frames).
+    _syncQsBlurOverlayWindowClones(stageX, stageY, frameWindowActors = null, rebuildChildren = true) {
         let container = this._qsBlurWindowClonesContainer;
         if (!container)
             return;
         try {
-            container.set_position(-stageX, -stageY);
-            container.set_scale(1.0, 1.0);
+            let state = container._liquidGlassCloneState || {};
+            let containerX = -stageX;
+            let containerY = -stageY;
+            if (state.x !== containerX || state.y !== containerY)
+                container.set_position(containerX, containerY);
+            if (state.scale !== 1.0)
+                container.set_scale(1.0, 1.0);
+            state.x = containerX;
+            state.y = containerY;
+            state.scale = 1.0;
+            container._liquidGlassCloneState = state;
+            if (!rebuildChildren)
+                return;
             let windowActors = frameWindowActors ?? global.get_window_actors();
             let activeWindows = new Set();
             let zOrderDirty = false;
@@ -2302,6 +2903,9 @@ export class QuickSettingsManager {
                 activeWindows.add(windowActor);
                 let clone = this._qsBlurWindowClones.get(windowActor);
                 if (!clone) {
+                    // DEV-PROBE-START
+                    bump('cloneCreate');
+                    // DEV-PROBE-END
                     clone = new UnpickableClone({ source: windowActor });
                     container.add_child(clone);
                     this._qsBlurWindowClones.set(windowActor, clone);
@@ -2315,6 +2919,9 @@ export class QuickSettingsManager {
             }
             for (let [windowActor, clone] of Array.from(this._qsBlurWindowClones.entries())) {
                 if (!activeWindows.has(windowActor)) {
+                    // DEV-PROBE-START
+                    bump('cloneDestroy');
+                    // DEV-PROBE-END
                     try {
                         clone.destroy();
                     }
@@ -2323,12 +2930,15 @@ export class QuickSettingsManager {
                     zOrderDirty = true;
                 }
             }
-            if (zOrderDirty) {
+            if (zOrderDirty || this._cloneOrderChanged(container, activeWindows, this._qsBlurWindowClones)) {
                 let index = 0;
                 for (let windowActor of activeWindows) {
                     let clone = this._qsBlurWindowClones.get(windowActor);
                     if (!clone)
                         continue;
+                    // DEV-PROBE-START
+                    bump('cloneIndex');
+                    // DEV-PROBE-END
                     try {
                         container.set_child_at_index(clone, index);
                     }
@@ -2339,68 +2949,176 @@ export class QuickSettingsManager {
         }
         catch (e) { }
     }
-    // Positions the blur overlay behind the QS menu, centered on the _stampActor
-    // with generous padding so the feathered mask can fade the edges smoothly.
-    _syncBlurOverlayGeometry(frameWindowActors = null) {
+    /**
+     * The popup's *settled* stage rect: where it sits once the stamp has finished.
+     *
+     * The backdrop is a screen-anchored sheet. Measuring it from the stamp's live
+     * transformed bounds made its feathered edges ride the stamp, so the whole
+     * frosted rectangle slid and grew with the popup while it sprang into place.
+     * Traced over one open (popup 350x454, stamp 1.08 -> 1.0 with the usual
+     * undershoot), the overlay rect swung 31px in width, 41px in height and 16px
+     * in x; that reads as the blur being dragged around by the menu instead of
+     * sitting behind it.
+     *
+     * The stamp is a pure scale about the popup's pivot, so the settled rect is
+     * recovered by removing exactly that scale: the pivot displacement
+     * (1 - s) * pivot is expressed in the actor's own untransformed units and
+     * mapped to the stage, and the size divides the scale out. The result is
+     * bit-stable for as long as the popup's layout is, which also keeps the
+     * blur's offscreen buffer at one size for the whole transition instead of
+     * reallocating it on the frames that resize it.
+     *
+     * Returns null when the popup has no usable geometry yet.
+     *
+     * The anchored rect is the resting one, so the stamped popup only stays
+     * inside it while the stamp's overhang fits in QS_BLUR_OVERLAY_PADDING. At
+     * the default open scale (1.08, i.e. 4% of a ~350x454 popup = 14px sideways
+     * and 18px down) it uses well under half of the 62px margin; a much larger
+     * `quick-settings-open-scale` would eventually push the popup past the
+     * feathered edge for the first frames of an open.
+     */
+    _stampSettledStageRect() {
+        let stamp = this._stampActor;
+        if (!stamp)
+            return null;
+        let [absX, absY] = stamp.get_transformed_position();
+        let [transformedW, transformedH] = stamp.get_transformed_size();
+        if (!Number.isFinite(absX) || !Number.isFinite(absY) ||
+            !Number.isFinite(transformedW) || !Number.isFinite(transformedH) ||
+            transformedW <= 0 || transformedH <= 0)
+            return null;
+        let settledW = transformedW;
+        let settledH = transformedH;
+        let [scaleX, scaleY] = stamp.get_scale();
+        if (Number.isFinite(scaleX) && Number.isFinite(scaleY) &&
+            scaleX > 0 && scaleY > 0 && (scaleX !== 1 || scaleY !== 1)) {
+            let [width, height] = stamp.get_size();
+            let [pivotX, pivotY] = stamp.get_pivot_point();
+            // The pivot is normalized, so the displacement of the actor's origin is
+            // (1 - s) * pivot * size in the actor's own (pre-scale) units.
+            let dx = (1 - scaleX) * pivotX * (Number.isFinite(width) ? width : 0);
+            let dy = (1 - scaleY) * pivotY * (Number.isFinite(height) ? height : 0);
+            // Those units are not stage pixels: the popup sits inside a parent that
+            // may itself scale (a scaled uiGroup, a scaled monitor). The factor is
+            // exactly the transformed size divided by the untransformed size and the
+            // actor's own scale.
+            let parentScaleX = width > 0 ? transformedW / (width * scaleX) : 1;
+            let parentScaleY = height > 0 ? transformedH / (height * scaleY) : 1;
+            settledW = transformedW / scaleX;
+            settledH = transformedH / scaleY;
+            absX -= dx * parentScaleX;
+            absY -= dy * parentScaleY;
+        }
+        return { x: absX, y: absY, w: settledW, h: settledH };
+    }
+    // Positions the blur overlay behind the QS menu using the popup's *settled*
+    // stage bounds (see _stampSettledStageRect), with generous padding so the
+    // feathered mask can fade the edges smoothly.
+    // rebuildWindowClones=false moves only the clone container (animation ticks).
+    _syncBlurOverlayGeometry(frameWindowActors = null, rebuildWindowClones = true) {
+        // DEV-PROBE-START
+        bump('overlaySync');
+        if (rebuildWindowClones)
+            bump('overlaySyncRebuild');
+        // DEV-PROBE-END
         if (!this._qsBlurOverlay || !this._stampActor)
             return;
-        // Each sync entry point refreshes the parent affine map before using it, so
-        // a cached value can never outlive the frame that computed it.
+        // Quick Settings drives the sheet from the popup's settled rect; the shared
+        // rect method owns the parenting, projection and geometry.
+        let settled = this._stampSettledStageRect();
+        if (!settled)
+            return;
+        this._syncBlurOverlayGeometryRect(settled, { padSide: QS_BLUR_OVERLAY_PADDING, padTop: 0 }, frameWindowActors, rebuildWindowClones);
+    }
+    /**
+     * Sizes, positions and re-populates the frosted backdrop sheet for an
+     * arbitrary stage rect.
+     *
+     * This is the whole of the backdrop's geometry logic, factored out of the
+     * Quick Settings path so the floating submenu can drive the same sheet: the
+     * blur buffer, the feathered corner mask, the wallpaper clone and the window
+     * clones are all pure functions of the rect plus the padding, so both
+     * surfaces get an identical frost instead of the submenu carrying a second
+     * blur stack of its own.
+     *
+     * `paddingOverride` supplies padSide/padTop for surfaces whose frost margin
+     * differs from the menu's (the submenu sits away from the panel edge, so it
+     * feathers on all four sides).
+     */
+    _syncBlurOverlayGeometryRect(settled, paddingOverride = null, frameWindowActors = null, rebuildWindowClones = true) {
+        if (!this._qsBlurOverlay)
+            return;
         this._originProjection = null;
         try {
-            let [absX, absY] = this._stampActor.get_transformed_position();
-            let [w, h] = this._stampActor.get_size();
-            if (!Number.isFinite(absX) || !Number.isFinite(absY) || w <= 0 || h <= 0)
-                return;
-            // Apply current scale to the apparent size
-            let sx = this._stampActor.scale_x ?? 1;
-            let sy = this._stampActor.scale_y ?? 1;
-            let scaledW = w * sx;
-            let scaledH = h * sy;
-            // Padding around the menu. Sides/bottom get the full-frost margin + the
-            // outward feather so the soft fade fits inside the overlay; the top is
-            // flush (0) so the blur never extends up into the top panel.
-            let padSide = QS_BLUR_OVERLAY_PADDING;
-            let padTop = 0;
-            let overlayStageX = absX - padSide + (w - scaledW) * 0.5;
-            let overlayStageY = absY - padTop + (h - scaledH) * 0.5;
-            let overlayW = scaledW + padSide * 2;
-            let overlayH = scaledH + padTop + padSide;
-            // Keep the overlay a sibling directly below the menu (mirrors the card
-            // backings), re-parenting if the menu moved containers on open.
             let parent = this.menu?.actor?.get_parent?.() || Main.layoutManager.uiGroup;
             if (parent && this._qsBlurOverlay.get_parent() !== parent) {
                 try {
                     this._qsBlurOverlay.get_parent()?.remove_child(this._qsBlurOverlay);
-                    parent.insert_child_below(this._qsBlurOverlay, this.menu.actor);
+                    // Keep the sheet as a sibling directly below the popup (mirrors the
+                    // card backings).
+                    if (this.menu?.actor && parent.contains(this.menu.actor))
+                        parent.insert_child_below(this._qsBlurOverlay, this.menu.actor);
+                    else
+                        parent.add_child(this._qsBlurOverlay);
                 }
                 catch (e) { }
             }
             // Convert stage coordinates to the overlay's parent-local coordinates via
             // the cached affine map rather than allocating a Clutter.Point here.
             let projection = this._getOriginProjection(parent);
+            let absX = settled.x;
+            let absY = settled.y;
+            let transformedW = settled.w;
+            let transformedH = settled.h;
+            // Padding around the surface. Sides/bottom get the full-frost margin +
+            // the outward feather so the soft fade fits inside the overlay; the top
+            // is flush (0) for the menu so the blur never extends up into the top
+            // panel.
+            let padSide = paddingOverride ? paddingOverride.padSide : QS_BLUR_OVERLAY_PADDING;
+            let padTop = paddingOverride ? paddingOverride.padTop : 0;
+            let overlayStageX = absX - padSide;
+            let overlayStageY = absY - padTop;
+            let overlayW = transformedW + padSide * 2;
+            let overlayH = transformedH + padTop + padSide;
             let overlayX = overlayStageX;
             let overlayY = overlayStageY;
             if (projection.success && !projection.identity) {
                 overlayX = projection.x + projection.xx * overlayStageX + projection.yx * overlayStageY;
                 overlayY = projection.y + projection.xy * overlayStageX + projection.yy * overlayStageY;
             }
-            this._qsBlurOverlay.set_position(Math.round(overlayX), Math.round(overlayY));
-            this._qsBlurOverlay.set_size(Math.round(overlayW), Math.round(overlayH));
+            let roundedX = Math.round(overlayX);
+            let roundedY = Math.round(overlayY);
+            let roundedW = Math.round(overlayW);
+            let roundedH = Math.round(overlayH);
+            let geometry = this._qsBlurOverlay._liquidGlassGeometry || {};
+            if (geometry.x !== roundedX || geometry.y !== roundedY)
+                this._qsBlurOverlay.set_position(roundedX, roundedY);
+            if (geometry.w !== roundedW || geometry.h !== roundedH)
+                this._qsBlurOverlay.set_size(roundedW, roundedH);
+            geometry.x = roundedX;
+            geometry.y = roundedY;
+            geometry.w = roundedW;
+            geometry.h = roundedH;
+            this._qsBlurOverlay._liquidGlassGeometry = geometry;
             // Keep the feathered mask aligned with the overlay. Scale to physical
             // pixels so the rounded mask stays pixel-accurate on HiDPI displays.
+            // Theme scale is cached (500ms TTL) to avoid a GI round-trip per tick.
             if (this._qsBlurMask) {
-                let scale = 1;
-                try {
-                    let themeContext = St.ThemeContext.get_for_stage(global.stage);
-                    scale = themeContext.scale_factor ?? 1;
-                }
-                catch (e) { }
-                if (scale <= 0)
-                    scale = 1;
-                this._qsBlurMask.setResolution(Math.max(1, Math.round(overlayW * scale)), Math.max(1, Math.round(overlayH * scale)));
-                this._qsBlurMask.setCornerRadius((this._cornerRadius || QS_BLUR_OVERLAY_CORNER_RADIUS) * scale);
-                this._qsBlurMask.setFeather(QS_BLUR_OVERLAY_FEATHER * scale);
+                let scale = this._themeScaleFactor();
+                let maskW = Math.max(1, Math.round(overlayW * scale));
+                let maskH = Math.max(1, Math.round(overlayH * scale));
+                let cornerRadius = (this._cornerRadius || QS_BLUR_OVERLAY_CORNER_RADIUS) * scale;
+                let feather = QS_BLUR_OVERLAY_FEATHER * scale;
+                if (geometry.maskW !== maskW || geometry.maskH !== maskH)
+                    this._qsBlurMask.setResolution(maskW, maskH);
+                if (geometry.cornerRadius !== cornerRadius)
+                    this._qsBlurMask.setCornerRadius(cornerRadius);
+                if (geometry.feather !== feather)
+                    this._qsBlurMask.setFeather(feather);
+                geometry.maskW = maskW;
+                geometry.maskH = maskH;
+                geometry.cornerRadius = cornerRadius;
+                geometry.feather = feather;
             }
             // Sync the clone geometry (clipBox/fbo/bgClone + window clones) so the
             // ACTOR-mode blur shows the real desktop/windows behind the menu.
@@ -2411,14 +3129,72 @@ export class QuickSettingsManager {
                 // Transitions on these actors are cleared once when the animation
                 // starts, not per frame: this runs on every tick while the menu fades,
                 // where there is never a running transition left to cancel.
-                clipBox.set_position(0, 0);
-                clipBox.set_size(Math.round(overlayW), Math.round(overlayH));
-                fboContainer.set_position(0, 0);
-                fboContainer.set_size(Math.round(overlayW), Math.round(overlayH));
-                bgClone.set_scale(1.0, 1.0);
-                bgClone.set_position(-Math.round(overlayStageX), -Math.round(overlayStageY));
-                bgClone.show();
-                this._syncQsBlurOverlayWindowClones(Math.round(overlayStageX), Math.round(overlayStageY), frameWindowActors);
+                //
+                // fboContainer is allocated at the menu size divided by the backdrop
+                // downscale factor and scaled back up by it, which is what makes
+                // ShellBlurEffect allocate and blur a smaller buffer (it sizes the
+                // buffer from the actor's untransformed allocation). Both sizes are kept
+                // fractional so the upscaled result lands exactly on the clip box: a
+                // sub-pixel shortfall would leave an unblurred sliver at the edges.
+                let fboScale = this._blurFboScale > 0 ? this._blurFboScale : 1;
+                let fboW = Math.max(1, roundedW / fboScale);
+                let fboH = Math.max(1, roundedH / fboScale);
+                if (geometry.fboW !== fboW || geometry.fboH !== fboH || geometry.fboScale !== fboScale) {
+                    clipBox.set_size(roundedW, roundedH);
+                    fboContainer.set_size(fboW, fboH);
+                    fboContainer.set_pivot_point(0, 0);
+                    fboContainer.set_scale(fboScale, fboScale);
+                    geometry.fboW = fboW;
+                    geometry.fboH = fboH;
+                    geometry.fboScale = fboScale;
+                }
+                if (!geometry.fboInitialized) {
+                    clipBox.set_position(0, 0);
+                    fboContainer.set_position(0, 0);
+                    bgClone.set_scale(1.0, 1.0);
+                    geometry.fboInitialized = true;
+                }
+                let bgX = -Math.round(overlayStageX);
+                let bgY = -Math.round(overlayStageY);
+                if (geometry.bgX !== bgX || geometry.bgY !== bgY)
+                    bgClone.set_position(bgX, bgY);
+                if (!bgClone.visible)
+                    bgClone.show();
+                geometry.bgX = bgX;
+                geometry.bgY = bgY;
+                // Rebuild the window clones whenever the set of visible windows changed;
+                // move-only otherwise. Deciding here rather than at the call sites means
+                // every path that re-measures the overlay (animation frames, the settled
+                // reveal, the submenu hand-off) keeps the glass showing the real windows:
+                // an explicit rebuild request always wins, and otherwise the window-set
+                // token catches a restack, a workspace switch or a moved window.
+                //
+                // The signature is a full pass over every window actor, and the clone
+                // children's geometry is expressed in *window* coordinates, so neither
+                // depends on the overlay's own position. During a scaling transition the
+                // only thing that changes between frames is the sheet's rect, so the
+                // whole section is skipped when nothing but the size moved -- that was a
+                // per-frame tax on exactly the frames that can least afford it.
+                let bgMoved = geometry.lastBgX !== bgX || geometry.lastBgY !== bgY;
+                let rectMoved = geometry.lastRectW !== roundedW || geometry.lastRectH !== roundedH;
+                geometry.lastBgX = bgX;
+                geometry.lastBgY = bgY;
+                geometry.lastRectW = roundedW;
+                geometry.lastRectH = roundedH;
+                let windowActors = frameWindowActors ?? global.get_window_actors();
+                // DEV-PROBE-START
+                bump('windowActors');
+                bump('signature');
+                // DEV-PROBE-END
+                let backdropSig = this._backdropWindowSignature(windowActors);
+                let setChanged = backdropSig !== this._qsBlurCloneSig;
+                let rebuildClones = rebuildWindowClones || setChanged;
+                // Always move the container (it tracks the background offset) but only
+                // re-seat the children when the window set or the offset actually moved.
+                if (rebuildClones || bgMoved || rectMoved || frameWindowActors === null)
+                    this._syncQsBlurOverlayWindowClones(-bgX, -bgY, windowActors, rebuildClones);
+                if (rebuildClones)
+                    this._qsBlurCloneSig = backdropSig;
             }
         }
         catch (e) { }
@@ -2743,280 +3519,331 @@ export class QuickSettingsManager {
         }
         this._styledButtons.clear();
     }
-    // Handles the custom bounce/spring physics when the menu opens or closes
-    _startAnimation(targetValue) {
-        let isOpening = (targetValue === 1);
-        if (LG_DEBUG_ANIM) {
-            log(`[LG-STAMP-QS] startAnimation target=${targetValue} opening=${isOpening} anim=${this._enableAnimation} targetActor=${!!this.targetActor} tick=${this._tickId}`);
+    // ---- Open/close transition -------------------------------------------
+    //
+    // The stamp itself lives in QuickSettingsStampAnimation. This manager's only
+    // jobs are to hand it the actors, to have the glass built *before* the popup
+    // is ever painted, and to re-sync that glass on every frame the stamp moves.
+    //
+    // The previous implementation owned its own tick here, and that tick carried
+    // two defects that were visible on every single open:
+    //
+    //   * It froze the card geometry two frames in and rendered the glass from
+    //     that snapshot for the rest of the spring, so the liquid glass sat at a
+    //     stale size/position while the tiles kept moving underneath it, then
+    //     snapped when the animation ended.
+    //   * It repaid stalled wall-clock time by integrating up to 100ms in one
+    //     frame, so the ~130ms compositor stall caused by rebuilding 14 glass
+    //     backings on the open frame teleported the spring to its end state. That
+    //     is the "flash" that appeared instead of an animation.
+    //
+    // Both are gone: the glass is measured live every frame, and the spring is
+    // integrated in fixed steps that a stalled frame is not allowed to catch up.
+    /** Pushes the spring settings into a live animation. */
+    _applySpringSettings() {
+        if (!this._anim)
+            return;
+        this._anim.setSpringParams(this._settings.get_double('quick-settings-spring-stiffness'), this._settings.get_double('quick-settings-spring-damping'), this._settings.get_double('quick-settings-spring-mass'));
+    }
+    /** Builds the stamp driver. Called from _applyEffect once the glass exists. */
+    _createAnimation() {
+        this._anim?.destroy();
+        this._anim = new QuickSettingsStampAnimation({
+            getPopup: () => this._stampActor,
+            getContent: () => this.animActor,
+            onFrame: (scale, opacity, opening) => this._onAnimationFrame(scale, opacity, opening),
+            onStart: (opening) => this._onAnimationStart(opening),
+            onSettled: (opening) => this._onAnimationSettled(opening),
+            isAlive: () => this._isEffectActive,
+        }, {
+            springStiffness: this._settings.get_double('quick-settings-spring-stiffness'),
+            springDamping: this._settings.get_double('quick-settings-spring-damping'),
+            springMass: this._settings.get_double('quick-settings-spring-mass'),
+            openScale: this._openScale,
+            // Top-centre: the bubble presses down out of the panel button.
+            pivotX: 0.5,
+            pivotY: 0.0,
+        });
+    }
+    /**
+     * Starts the opening stamp. Called from the menu's open-state-changed handler,
+     * which GNOME emits before it positions and shows the popup.
+     *
+     * Running it there rather than from inside BoxPointer.open() matters: the
+     * boxpointer patch snaps the popup to scale 1 as part of its bookkeeping, and
+     * that happens after this. The animation's first frame is applied in
+     * BEFORE_REDRAW of the very frame that shows the popup, so the transform the
+     * patch wrote is never the one that reaches the screen.
+     *
+     * Returns true when this owns the opening transform.
+     */
+    _beginOpenStamp() {
+        const anim = this._anim;
+        if (!anim || !this._enableAnimation || !this._isEffectActive) {
+            // No custom stamp (switched off, or no glass). Do not leave the menu
+            // transparent and pivoted from the previous close.
+            try {
+                this.animActor.opacity = 255;
+                this._stampActor?.set_pivot_point?.(0.5, 0);
+                this._stampActor?.set_scale?.(1, 1);
+            }
+            catch (e) { }
+            return false;
         }
-        if (this._tickId !== 0) {
-            if (global.compositor?.get_laters) {
+        // A submenu hand-off re-shows Quick Settings instantly behind the closing
+        // submenu. No stamp and no fade there: _finishInstantOpenFromSubmenu owns
+        // that frame.
+        if (this._suppressNextOpenAnimation || this._isSubmenuTransitioning || this._holdSubmenuReveal)
+            return false;
+        // The open-state-changed handler already ran _applyCardEffects(); this only
+        // covers a direct boxpointer open that skipped it.
+        if (this._cardActors.size === 0) {
+            try {
+                this._applyCardEffects();
+            }
+            catch (e) { }
+        }
+        this._isAnimating = true;
+        this._sweepBaselineCardCount = this._cardActors.size;
+        // Stamp first, so the sync below measures the geometry that will actually
+        // be painted. prepareOpen() also takes the content to opacity 0, so nothing
+        // laid out here can be seen.
+        if (!anim.prepareOpen()) {
+            this._isAnimating = false;
+            return false;
+        }
+        // Drop the previous open's remembered geometry before the first sync: the
+        // transient-reflow grace path reuses it, and a stale rect would paint glass
+        // at the old position for a frame.
+        this._cardLastGoodRect.clear();
+        this._setCardBackingsOpacity(0);
+        // Replay the cached clip-target sweep where possible instead of re-walking
+        // the popup subtree on the open frame.
+        try {
+            this._applyClipTargetsFor(this._stampActor ?? this.targetActor);
+        }
+        catch (e) { }
+        // Move-only first sync. The backing containers and their window clones are
+        // still live from the previous open, so rebuilding them here would put the
+        // whole clone cost on the frame that opens the menu. The leading animation
+        // frames pick up any rebuild that is genuinely needed, while the glass is
+        // still fully transparent.
+        try {
+            this._syncCardBackings(false, false);
+        }
+        catch (e) { }
+        try {
+            this._syncBlurOverlayGeometry(null, false);
+        }
+        catch (e) { }
+        anim.start(true);
+        return true;
+    }
+    _onAnimationStart(opening) {
+        this._isAnimating = true;
+        this._animCloneRebuildFrames = opening ? QS_ANIM_CLONE_REBUILD_FRAMES : 0;
+        try {
+            this._setTransitionBlurReduced(true);
+        }
+        catch (e) { }
+    }
+    /**
+     * The single place where a transition frame reaches the screen. The popup's
+     * scale and the content's opacity have already been written by the animation;
+     * this re-measures the glass against that exact geometry and paints it with
+     * the same opacity, so content and liquid glass can never drift apart.
+     */
+    _onAnimationFrame(scale, opacity, opening) {
+        // The backdrop is painted from the first frame of the transition, with the
+        // same opacity the content has at that moment, so the blur and the glass
+        // fade in together rather than the blur arriving once the popup has stopped
+        // moving. See _overlayFadeFactor for why the old scale-based gate is gone.
+        if (this._qsBlurOverlay) {
+            const overlayOpacity = this._overlayFadeFactor(scale, opening) * opacity;
+            if (overlayOpacity > 0) {
+                if (!this._qsBlurOverlay.visible)
+                    this._qsBlurOverlay.show();
+                if (this._qsBlurOverlay.opacity !== overlayOpacity)
+                    this._qsBlurOverlay.opacity = overlayOpacity;
                 try {
-                    global.compositor.get_laters().remove(this._tickId);
+                    this._syncBlurOverlayGeometry(null, false);
                 }
                 catch (e) { }
             }
-            this._tickId = 0;
-        }
-        // If animation is disabled, just hide the menu and exit
-        if (!this._enableAnimation) {
-            this._isAnimating = false;
-            // 独自アニメーション（スケール変更など）の残骸をリセットし、GNOMEデフォルトの動作に任せる
-            if (this.animActor) {
-                // this.animActor.remove_all_transitions();
-                this.animActor.set_scale(1.0, 1.0);
-                this.animActor.opacity = 255;
-            }
-            if (this._qsBlurOverlay) {
+            else {
                 this._qsBlurOverlay.opacity = 0;
                 this._qsBlurOverlay.hide();
             }
+        }
+        // Window clones are pixel-identical for the length of a fade, so only the
+        // leading frames of an open pay for rebuilding them; the rest just move the
+        // container. A backing with no clones yet always builds (see
+        // _syncCardBackings), so a spent budget can never leave glass empty.
+        let rebuildClones = false;
+        if (opening && this._animCloneRebuildFrames > 0 && this._cardActors.size > 0) {
+            this._animCloneRebuildFrames--;
+            rebuildClones = true;
+        }
+        try {
+            this._syncCardBackings(false, rebuildClones, null);
+        }
+        catch (e) { }
+    }
+    /**
+     * How much of the whole-popup backdrop blur to paint at this point in a
+     * transition.
+     *
+     * This used to hold the backdrop back until the stamp was essentially done
+     * (scale <= 1.02) and then ramp it in over the tail of the fade, to keep the
+     * largest offscreen pass off the expensive early frames. Measurement never
+     * supported that: disabling the backdrop entirely did not move the worst frame
+     * (60.6ms mean worst frame with it, 73.9ms without, same build and load), so
+     * the gate bought nothing and only made the blur visibly arrive after the menu
+     * had stopped moving.
+     *
+     * It now rides the same opacity ramp as the content from the first frame, which
+     * is exactly how the clock menu's single glass sheet behaves (UIManager writes
+     * the same animated opacity to the glass and to the content).
+     */
+    _overlayFadeFactor(_scale, _opening) {
+        return 1;
+    }
+    _onAnimationSettled(opening) {
+        this._isAnimating = false;
+        this._animCloneRebuildFrames = 0;
+        try {
+            this._setTransitionBlurReduced(false);
+        }
+        catch (e) { }
+        if (opening) {
+            // Land on exactly 1.0 / 255: settling on 0.9987 leaves the whole menu
+            // scaled by a fraction and the text visibly resampled.
+            try {
+                this._stampActor?.set_scale?.(1, 1);
+                this.animActor.opacity = 255;
+                this._applyMenuOffsets();
+                this._syncGeometry();
+                this._syncCardBackings(false, true);
+                // The overlay is on screen for the whole transition now, so land its
+                // clone set and geometry exactly on the settled rect. Forced rather than
+                // token-driven: this is the one point in the open where a full, settled
+                // rebuild is guaranteed to be cheap.
+                this._syncBlurOverlayGeometry(null, true);
+            }
+            catch (e) { }
+            this._wakeCardBackingSync();
+            // Safety net for widgets the shell added while the menu was opening; it
+            // is safe to pay for now that nothing is moving.
+            this._runLateClipSweep();
             return;
         }
-        // Clear any built-in GNOME transitions that might interfere with our logic
-        if (this.animActor)
-            this.animActor.remove_all_transitions();
-        if (isOpening) {
-            // Stamp-in: start oversized, spring down to 1.0 while fading in.
-            this._springScale.value = this._openScale;
-            this._springScale.velocity = 0;
-            this._springScale.target = 1;
-            this._springPos.value = 0;
-            this._springPos.velocity = 0;
-            this._springPos.target = 1;
+        // Closed. Hand the popup back to GNOME and finish the bookkeeping that the
+        // suppressed BoxPointer.close() would have done.
+        this._animCloneRebuildFrames = 0;
+        try {
+            this.menu?.actor?.hide?.();
+            this.menu?._boxPointer?.hide?.();
         }
-        else {
-            this._springScale.value = Math.max(0.001, Math.min(1, this._springScale.value || 1));
-            this._springScale.velocity = 0;
-            this._springScale.target = 0;
-            this._springPos.value = Math.max(0.001, Math.min(1, this._springPos.value || 1));
-            this._springPos.velocity = 0;
-            this._springPos.target = 0;
-        }
-        // If an animation loop isn't already running, start a new one
-        if (this._tickId === 0) {
-            this._isAnimating = true;
-            if (isOpening && this._stampActor) {
-                // Press down from the top-center exactly like the calendar menu. The QS
-                // bubble is clamped against the screen's right edge, so the stamp's
-                // rightward expansion slips invisibly off-screen while the left and
-                // bottom edges press in symmetrically.
-                this._stampActor.set_pivot_point(0.5, 0.0);
-                this._stampActor.set_scale(this._openScale, this._openScale);
-                this.animActor.opacity = 0;
-                // The stamp scales the real boxpointer, so make sure it isn't clipped
-                // while oversized.
-                this._disableClippingRecursively(this._stampActor);
-                if (LG_DEBUG_ANIM) {
-                    try {
-                        let [qx, qy] = this._stampActor.get_transformed_position();
-                        let [qw, qh] = this._stampActor.get_size();
-                        let mon = Main.layoutManager.primaryMonitor;
-                        log(`[LG-QS-GEO] pos=(${Math.round(qx)},${Math.round(qy)}) size=(${Math.round(qw)}x${Math.round(qh)}) monitor=(${mon?.width}x${mon?.height})`);
-                    }
-                    catch (e) { }
-                }
-                // _syncCardBackings tracks each card's glass at the popup's current
-                // scale, so the liquid stays glued to the content like the calendar's
-                // bgActor instead of sliding underneath it.
-                this._unfreezeCardBackings();
-                this._syncCardBackings();
+        catch (e) { }
+        this.animActor.opacity = 0;
+        if (this._stampActor) {
+            try {
+                this._stampActor.set_pivot_point(0, 0);
+                this._stampActor.set_scale(1, 1);
             }
-            // Rebuild the per-card window clones on the opening ticks only. A closing
-            // menu is fading out and its clones were built on the last open, so the
-            // close path starts at zero. On open, the first tick or two absorb the
-            // lazy layout pass; after that the clones are positionally final for the
-            // rest of the fade.
-            this._windowCloneRebuildFramesLeft = isOpening ? QS_ANIM_CLONE_REBUILD_FRAMES : 0;
-            let cloneRebuildPassSignature = '';
-            let cloneRebuildPassFrame = 0;
-            let runTick = () => {
-                if (!this._stampActor || !this.animActor) {
-                    this._tickId = 0;
-                    this._isAnimating = false;
-                    return GLib.SOURCE_REMOVE;
-                }
-                let currentTime = GLib.get_monotonic_time();
-                if (this._lastTickTime === undefined)
-                    this._lastTickTime = currentTime;
-                let elapsedUs = currentTime - this._lastTickTime;
-                let elapsedMs = elapsedUs / 1000;
-                this._lastTickTime = currentTime;
-                // Cap elapsed time to prevent physics explosions, and enforce a MINIMUM time 
-                // (4ms) to prevent Zeno's paradox (stuck at 0 movement) when the frame delta is tiny!
-                if (elapsedMs > 50)
-                    elapsedMs = 50;
-                if (elapsedMs < 4)
-                    elapsedMs = 4;
-                let isClosing = (this._springScale.target === 0);
-                let stopped = false;
-                let s, p;
-                let physicsDt = elapsedMs;
-                if (isClosing) {
-                    // Use a simple exponential decay for closing
-                    let speed = 15.0;
-                    let dtSec = physicsDt / 1000;
-                    this._springScale.value += (0 - this._springScale.value) * (1.0 - Math.exp(-speed * dtSec));
-                    this._springPos.value += (0 - this._springPos.value) * (1.0 - Math.exp(-speed * dtSec));
-                    s = this._springScale.value;
-                    p = this._springPos.value;
-                    // Stop as soon as the menu is effectively invisible. Snapping at
-                    // 0.02 alpha instead of 0.005 retires the last few frames of the
-                    // decay, which are imperceptible but still cost a full sync pass.
-                    if (s < 0.02) {
-                        s = 0;
-                        p = 0;
-                        stopped = true;
-                    }
-                }
-                else {
-                    // Use Hooke's law spring physics for opening.
-                    // Update BOTH springs every frame: `&&` between the two update() calls
-                    // short-circuits, leaving the opacity spring stuck at 0 for the whole
-                    // open (menu stays invisible until it pops in).
-                    let sStop = this._springScale.update(physicsDt);
-                    let pStop = this._springPos.update(physicsDt);
-                    stopped = sStop && pStop;
-                    s = this._springScale.value;
-                    p = this._springPos.value;
-                    // Magnet effect: Snap to exactly 1.0 when almost settled
-                    if (Math.abs(1.0 - s) < 0.002 && Math.abs(this._springScale.velocity) < 0.03) {
-                        s = 1.0;
-                        p = 1.0;
-                        stopped = true;
-                    }
-                }
-                // Opening uses the scale spring for the stamp (oversized -> 1.0);
-                // closing keeps the menu at full size while it fades out.
-                let currentScale = isClosing ? 1.0 : Math.max(s, 0.9);
-                let opacity = Math.min(255, Math.max(0, p * 255));
-                // Apply the calculated scale to the UI
-                this._stampActor.set_scale(currentScale, currentScale);
-                this._stampFrame = (this._stampFrame || 0) + 1;
-                if (LG_DEBUG_ANIM && (this._stampFrame <= 3 || stopped)) {
-                    log(`[LG-STAMP-QS] tick #${this._stampFrame} isClosing=${isClosing} s=${s.toFixed(4)} p=${p.toFixed(4)} scale=${currentScale.toFixed(4)} opacity=${opacity.toFixed(1)} stopped=${stopped}`);
-                }
-                this.animActor.opacity = opacity;
-                // One window-actor snapshot per tick, shared by the overlay and the card
-                // backings (each used to fetch its own copy).
-                let frameWindowActors = global.get_window_actors();
-                // Drive the localized blur overlay in lockstep with the menu fade
-                if (this._qsBlurOverlay) {
-                    if (opacity > 0) {
-                        this._qsBlurOverlay.show();
-                        this._qsBlurOverlay.opacity = Math.min(255, Math.round(opacity));
-                        this._syncBlurOverlayGeometry(frameWindowActors);
-                    }
-                    else {
-                        this._qsBlurOverlay.opacity = 0;
-                        this._qsBlurOverlay.hide();
-                    }
-                }
-                // Card geometry is updated on every tick so the glass stays glued to
-                // the scaling content, but the per-card window-clone rebuild is
-                // throttled: the clones are pixel-identical for the length of the fade,
-                // and the container move above/below carries every child along. A slow
-                // periodic signature check keeps a window appearing or disappearing
-                // mid-fade from leaving stale clones behind.
-                // "Animation Interval (ms)" throttles how often the blurred window
-                // content is re-sampled during the fade. It used to be read and then
-                // ignored (the loop is vsync-locked, so a timer interval had nothing to
-                // apply to); here it maps to a rebuild cadence. 0 or 1 means every
-                // frame, which is the original behaviour.
-                let framesPerRebuild = this._framesPerCloneRebuild();
-                let rebuildWindowClones = this._windowCloneRebuildFramesLeft > 0;
-                if (!rebuildWindowClones) {
-                    cloneRebuildPassFrame++;
-                    if (framesPerRebuild <= 1 || cloneRebuildPassFrame >= framesPerRebuild) {
-                        cloneRebuildPassFrame = 0;
-                        // Only re-sample when the visible window set actually moved, so a
-                        // static desktop costs nothing even on a short interval.
-                        let signature = this._getWindowActorsSignature(frameWindowActors);
-                        if (signature !== cloneRebuildPassSignature) {
-                            cloneRebuildPassSignature = signature;
-                            rebuildWindowClones = true;
-                        }
-                    }
-                }
-                if (rebuildWindowClones) {
-                    this._windowCloneRebuildFramesLeft =
-                        Math.max(0, this._windowCloneRebuildFramesLeft - 1);
-                }
-                this._syncCardBackings(false, rebuildWindowClones, frameWindowActors);
-                // Cleanup when animation finishes
-                if (stopped) {
-                    this._tickId = 0;
-                    this._isAnimating = false;
-                    this._lastTickTime = undefined;
-                    if (isClosing && this.menu.actor) {
-                        this._springScale.value = 0;
-                        this._springScale.velocity = 0;
-                        this._springScale.target = 0;
-                        this._springPos.value = 0;
-                        this._springPos.velocity = 0;
-                        this._springPos.target = 0;
-                        this.menu.actor.hide(); // Tell GNOME the menu is officially closed
-                        // For QS, menu.actor is the wrapper — hiding it leaves
-                        // boxPointer.visible === true. Hide it too, mirroring GNOME's own
-                        // close end-state, so PopupMenu.close()'s boxPointer.visible
-                        // check stays consistent.
-                        try {
-                            this.menu._boxPointer?.hide?.();
-                        }
-                        catch (e) { }
-                        // GNOME's BoxPointer.close onComplete was suppressed — emit 'menu-closed' now
-                        let pendingCloseCb = this._pendingMenuClosedCallback;
-                        this._pendingMenuClosedCallback = null;
-                        pendingCloseCb?.();
-                        this.animActor.opacity = 0;
-                        if (this._qsBlurOverlay) {
-                            this._qsBlurOverlay.opacity = 0;
-                            this._qsBlurOverlay.hide();
-                        }
-                        if (this._stampActor) {
-                            this._stampActor.set_pivot_point(0.0, 0.0);
-                            this._stampActor.set_scale(1.0, 1.0);
-                        }
-                        this._unfreezeCardBackings();
-                        this._removeCardEffects();
-                        this._stopCardBackingSync();
-                    }
-                    if (!isClosing) {
-                        this._springScale.value = 1;
-                        this._springScale.velocity = 0;
-                        this._springScale.target = 1;
-                        this._springPos.value = 1;
-                        this._springPos.velocity = 0;
-                        this._springPos.target = 1;
-                        this.targetActor.set_scale(1.0, 1.0);
-                        this.animActor.set_scale(1.0, 1.0);
-                        this.animActor.opacity = 255;
-                        if (this._stampActor)
-                            this._stampActor.set_scale(1.0, 1.0);
-                        // Animation done: resume live geometry tracking on settled layout.
-                        this._unfreezeCardBackings();
-                        this._syncGeometry();
-                        this._syncCardBackings();
-                        // Wake up the card backing sync timer now that animation is done
-                        this._wakeCardBackingSync();
-                        try {
-                            if (this._stampActor) {
-                                let [sx, sy] = this._stampActor.get_transformed_position();
-                                let [sw, sh] = this._stampActor.get_size();
-                                let mon = Main.layoutManager.primaryMonitor;
-                                log(`[LG-QS-SETTLED] pos=(${Math.round(sx)},${Math.round(sy)}) size=(${Math.round(sw)}x${Math.round(sh)}) mon=(${mon?.width}x${mon?.height})`);
-                            }
-                        }
-                        catch (e) { }
-                    }
-                    return GLib.SOURCE_REMOVE; // Stop the GLib timeout loop
-                }
-                this._tickId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, runTick);
-                return GLib.SOURCE_REMOVE; // Keep the loop running via before redraw
-            };
-            this._lastTickTime = GLib.get_monotonic_time();
-            this._tickId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, runTick);
+            catch (e) { }
         }
+        if (this._qsBlurOverlay) {
+            this._qsBlurOverlay.opacity = 0;
+            this._qsBlurOverlay.hide();
+        }
+        // Keep the card glass alive but invisible. It used to be destroyed here and
+        // rebuilt on the next open, which cost ~40ms of synchronous work on the
+        // open frame -- the stall that made the spring teleport.
+        this._hideCardBackings();
+        this._stopCardBackingSync();
+        let pendingCloseCb = this._pendingMenuClosedCallback;
+        this._pendingMenuClosedCallback = null;
+        this._flushPendingRestoreInput();
+        pendingCloseCb?.();
+    }
+    /**
+     * Runs the deferred "lazy widget" sweep once the popup is visually settled.
+     *
+     * If the stamp is running, _onAnimationSettled() calls this at the end of the
+     * transition; otherwise it is scheduled a few frames out. Either way it never
+     * competes with the animation.
+     */
+    _scheduleLateClipSweep() {
+        if (this._clipSweepPendingId !== 0) {
+            try {
+                GLib.source_remove(this._clipSweepPendingId);
+            }
+            catch (e) { }
+            this._clipSweepPendingId = 0;
+        }
+        if (this._isAnimating)
+            return; // the settle handler owns it
+        this._clipSweepPendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 80, () => {
+            this._clipSweepPendingId = 0;
+            this._runLateClipSweep();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+    _runLateClipSweep() {
+        if (this._clipSweepPendingId !== 0) {
+            try {
+                GLib.source_remove(this._clipSweepPendingId);
+            }
+            catch (e) { }
+            this._clipSweepPendingId = 0;
+        }
+        if (!this._isEffectActive || !this.menu?.isOpen)
+            return;
+        try {
+            // Replay the sweep recorded at open time. Re-applying a clip flag that is
+            // already false is a no-op for Clutter, so this is cheap.
+            this._applyClipTargetsFor(this.targetActor);
+            // The card pass is NOT cheap: it re-walks the popup, rewires drill-down
+            // and re-hides native parts (style + width mutations that force a full
+            // relayout of the menu on the next frame -- 60-90ms on the target
+            // hardware). The open path already ran it, so only repeat it when a card
+            // actually turned up since then.
+            if (this._cardActors.size !== this._sweepBaselineCardCount)
+                this._requestCardEffectsCoalesced();
+        }
+        catch (e) { }
+    }
+    /** Hides every card backing without tearing it (or its shader) down. */
+    _hideCardBackings() {
+        for (let backing of this._cardBackings.values()) {
+            try {
+                backing.hide();
+                backing.opacity = 0;
+            }
+            catch (e) { }
+        }
+    }
+    /**
+     * True while the actor is still attached somewhere under the Quick Settings
+     * menu. Used to tell "this card left the menu" (prune its glass) apart from
+     * "this card was not visible during a tree walk" (keep its glass).
+     */
+    _isInMenuTree(actor) {
+        let root = this.menu?.actor ?? null;
+        let current = actor;
+        let guard = 0;
+        while (current && guard++ < 64) {
+            if (current === root)
+                return true;
+            try {
+                current = current.get_parent?.() ?? null;
+            }
+            catch (e) {
+                return false;
+            }
+        }
+        return false;
     }
     _removeEffect() {
         if (!this._isEffectActive)
@@ -3039,12 +3866,7 @@ export class QuickSettingsManager {
         }
         this._signals = [];
         // Stop the spring animation loop
-        if (this._tickId && this._tickId !== 0) {
-            if (global.compositor?.get_laters) {
-                global.compositor.get_laters().remove(this._tickId);
-            }
-            this._tickId = 0;
-        }
+        this._anim?.stop();
         // _applyEffect内で登録したアニメーションシグナルも解除する（多重登録防止）
         if (this._animSignalId) {
             try {
@@ -3111,13 +3933,21 @@ export class QuickSettingsManager {
             this._qsBlurMask = null;
             this._qsBlurClipBox = null;
             this._qsBlurFboContainer = null;
+            this._qsBlurHalfBox = null;
             this._qsBlurBgClone = null;
             this._qsBlurWindowClonesContainer = null;
             this._qsBlurWindowClones.clear();
+            // The clones are gone with the overlay, so the token no longer describes
+            // anything that exists and the next sync must build from scratch.
+            this._qsBlurCloneSig = '';
         }
         this._stableBaseW = undefined;
         this._stableBaseH = undefined;
     }
+    // ---- Floating submenu ------------------------------------------------
+    //
+    // The submenu owns its own glass stack (see submenuPanel.ts) and no longer
+    // borrows Quick Settings' frosted sheet.
     showSubmenuInFloatingWindow(stCard, kind) {
         if (!this._submenuRenderer) {
             this._submenuRenderer = new CustomSubmenuRenderer(this);
@@ -3147,124 +3977,189 @@ export class QuickSettingsManager {
     closeQuickSettingsForSubmenu(animate = false) {
         this._isSubmenuTransitioning = true;
         this._suppressNextCloseAnimation = true;
-        if (!animate) {
+        // Sequenced handoff: hide QS instantly (no 120ms stamp ease) BEFORE the
+        // submenu fades in, so the two animations never compete for the compositor
+        // on the same frames. `animate` is kept for API compatibility but behaves
+        // like the instant path: overlapping eases were the main jitter source.
+        try {
+            this.menu.close(false);
+        }
+        catch (e) { }
+        try {
+            this._setTransitionBlurReduced(false);
+        }
+        catch (e) { }
+        if (this._qsBlurOverlay) {
             try {
-                this.menu.close(false);
+                this._qsBlurOverlay.remove_all_transitions();
             }
             catch (e) { }
-            if (this._qsBlurOverlay) {
-                this._qsBlurOverlay.opacity = 0;
-                this._qsBlurOverlay.hide();
-            }
-            return;
-        }
-        // Push QS out of the way as the submenu pops in: quick shrink + fade of the
-        // popup, then close for real (suppressed, so no stamp re-runs).
-        // Also fade out the background blur overlay in sync.
-        if (this._qsBlurOverlay) {
-            this._qsBlurOverlay.remove_all_transitions();
-            this._qsBlurOverlay.ease({
-                opacity: 0,
-                duration: 120,
-                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                onComplete: () => {
-                    if (this._qsBlurOverlay)
-                        this._qsBlurOverlay.hide();
-                },
-            });
+            this._qsBlurOverlay.opacity = 0;
+            this._qsBlurOverlay.hide();
         }
         try {
             if (this._stampActor) {
                 this._stampActor.remove_all_transitions();
-                this._stampActor.ease({
-                    scale_x: 0.9,
-                    scale_y: 0.9,
-                    opacity: 0,
-                    duration: 120,
-                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                    onComplete: () => {
-                        try {
-                            this.menu.close(false);
-                        }
-                        catch (e) { }
-                    },
-                });
-            }
-            else {
-                try {
-                    this.menu.close(false);
-                }
-                catch (e) { }
+                this._stampActor.set_scale(1.0, 1.0);
+                this._stampActor.opacity = 255;
             }
         }
-        catch (e) {
-            try {
-                this.menu.close(false);
-            }
-            catch (e2) { }
-        }
+        catch (e) { }
     }
-    revealQuickSettingsAfterSubmenu(pop = false) {
+    revealQuickSettingsAfterSubmenu(pop = false, animated = false) {
         this._holdSubmenuReveal = false;
-        // The layout was already settled by _finishInstantOpenFromSubmenu while
-        // the submenu close animation played, so QS can be revealed cleanly
-        // without re-running the bouncy spring (which reads as a disconnected,
-        // jittery hand-off). Mark the springs settled so future open/closes start
-        // from a clean state.
-        if (this._tickId !== 0) {
-            try {
-                if (global.compositor?.get_laters)
-                    global.compositor.get_laters().remove(this._tickId);
-                else
-                    GLib.source_remove(this._tickId);
-            }
-            catch (e) { }
-            this._tickId = 0;
-        }
+        // Single reveal point: QS reopened hidden at submenu-close start and
+        // settled behind the fade with frozen glass. `pop` is intentionally
+        // ignored: the EASE_OUT_BACK overshoot pop was a jitter source under load.
+        // `animated` runs the fade+rise return entrance (crossfaded with the
+        // submenu shrink); false keeps the instant hard-cut for takeovers.
+        void pop;
+        this._isSubmenuTransitioning = false;
         this._isAnimating = false;
-        this._springScale.value = 1;
-        this._springScale.velocity = 0;
-        this._springScale.target = 1;
-        this._springPos.value = 1;
-        this._springPos.velocity = 0;
-        this._springPos.target = 1;
+        try {
+            this._setTransitionBlurReduced(false);
+        }
+        catch (e) { }
+        this._anim?.finish(true);
         try {
             if (this.menu && this.menu.actor) {
                 this.menu.actor.remove_all_transitions?.();
-                this.menu.actor.opacity = 255;
             }
             if (this.animActor) {
                 this.animActor.remove_all_transitions();
-                this.animActor.opacity = 255;
             }
             if (this._stampActor) {
                 this._stampActor.remove_all_transitions();
                 this._stampActor.set_scale(1.0, 1.0);
-                if (pop) {
-                    // Subtle pop back into place as the submenu collapses onto the card.
-                    this._stampActor.set_scale(0.96, 0.96);
-                    this._stampActor.ease({
-                        scale_x: 1.0,
-                        scale_y: 1.0,
-                        duration: 160,
-                        mode: Clutter.AnimationMode.EASE_OUT_BACK,
-                    });
-                }
+                this._stampActor.opacity = 255;
+            }
+            if (this._qsBlurOverlay) {
+                this._qsBlurOverlay.remove_all_transitions();
             }
         }
         catch (e) { }
-        // Re-sync the card backings immediately so the glass is visible on the
-        // same frame the Quick Settings content reappears. Without this the
-        // backings keep the opacity they had while the submenu was covering QS
-        // (menu.actor.opacity was 0), so the glass lags the content by a frame
-        // or more (up to the idle sync interval once the backing sync idles).
-        this._wakeCardBackingSync();
-        // Show the background blur overlay since QS is now fully visible
-        if (this._qsBlurOverlay) {
-            this._syncBlurOverlayGeometry();
-            this._qsBlurOverlay.show();
-            this._qsBlurOverlay.opacity = 255;
+        // Unfreeze upfront: layout settled hidden behind the fade, so live
+        // tracking is exact from the reveal frame. Bumps the generation to
+        // invalidate any queued post-reveal unfreeze from an older handoff.
+        try {
+            this._unfreezeCardBackings();
         }
+        catch (e) { }
+        this._frozenUnfreezeGen++;
+        // One full sync so clones are current for the reveal (unfrozen above, so
+        // geometry is live and settled). The idle timer stays stopped through the
+        // entrance — the ease drives move-only syncs and finishReturn restarts it.
+        try {
+            this._stopCardBackingSync();
+        }
+        catch (e) { }
+        try {
+            this._syncCardBackings(false, true);
+        }
+        catch (e) { }
+        // ...and the overlay geometry is final before it fades in (QS itself does
+        // not move during the entrance, so no per-frame overlay sync is needed).
+        if (this._qsBlurOverlay) {
+            try {
+                this._syncBlurOverlayGeometry(null, true);
+            }
+            catch (e) { }
+            this._qsBlurOverlay.show();
+        }
+        if (!animated || !this.menu?.isOpen) {
+            try {
+                if (this.menu && this.menu.actor) {
+                    this.menu.actor.opacity = 255;
+                }
+                if (this.animActor) {
+                    this.animActor.opacity = 255;
+                    this._applyMenuOffsets();
+                }
+                if (this._qsBlurOverlay) {
+                    this._qsBlurOverlay.opacity = 255;
+                }
+            }
+            catch (e) { }
+            // Resume the idle backing loop (stopped for the hidden phase above).
+            this._wakeCardBackingSync();
+            return;
+        }
+        // Animated return entrance: menu.actor fades 0→255 while animActor rises
+        // into place. Glass follows via per-frame move-only syncs (backing opacity
+        // derives from card paint opacity, positions track the live rise) — sizes
+        // stay exact because layout already settled behind the submenu fade.
+        let easeGen = ++this._revealEaseGen;
+        let baseY = this._menuYoffset;
+        try {
+            this._applyMenuOffsets();
+            baseY = this.animActor.translation_y;
+            this.menu.actor.opacity = 0;
+            this.animActor.translation_y = baseY + QS_RETURN_RISE_PX;
+            this.animActor.opacity = 255;
+            if (this._qsBlurOverlay) {
+                this._qsBlurOverlay.opacity = 0;
+            }
+        }
+        catch (e) { }
+        let finishReturn = () => {
+            if (!this._isEffectActive || !this.menu?.isOpen)
+                return;
+            if (easeGen !== this._revealEaseGen)
+                return;
+            this._revealEaseGen = 0;
+            try {
+                this.menu.actor.opacity = 255;
+                this.animActor.translation_y = baseY;
+                this.animActor.opacity = 255;
+                if (this._qsBlurOverlay) {
+                    this._qsBlurOverlay.opacity = 255;
+                }
+                this._syncCardBackings(false, false);
+            }
+            catch (e) { }
+            this._wakeCardBackingSync();
+        };
+        // Glass tracking frames covering the ease duration.
+        let framesLeft = Math.max(1, Math.ceil(QS_RETURN_DURATION_MS / QS_ASSUMED_FRAME_MS));
+        let trackFrame = () => {
+            if (!this._isEffectActive || !this.menu?.isOpen)
+                return GLib.SOURCE_REMOVE;
+            if (easeGen !== this._revealEaseGen)
+                return GLib.SOURCE_REMOVE;
+            try {
+                this._syncCardBackings(false, false);
+            }
+            catch (e) { }
+            if (--framesLeft <= 0)
+                return GLib.SOURCE_REMOVE;
+            this._addLaterOnce(trackFrame);
+            return GLib.SOURCE_REMOVE;
+        };
+        try {
+            this.menu.actor.ease({
+                opacity: 255,
+                duration: QS_RETURN_DURATION_MS,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                onComplete: finishReturn,
+            });
+            this.animActor.ease({
+                translation_y: baseY,
+                duration: QS_RETURN_DURATION_MS,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            });
+            if (this._qsBlurOverlay) {
+                this._qsBlurOverlay.ease({
+                    opacity: 255,
+                    duration: QS_RETURN_DURATION_MS,
+                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                });
+            }
+        }
+        catch (e) {
+            finishReturn();
+            return;
+        }
+        this._addLaterOnce(trackFrame);
     }
     /**
      * Complete a floating-submenu transition that intentionally does not return
@@ -3275,23 +4170,8 @@ export class QuickSettingsManager {
         this._suppressNextOpenAnimation = false;
         this._suppressNextCloseAnimation = false;
         this._holdSubmenuReveal = false;
-        if (this._tickId !== 0) {
-            try {
-                if (global.compositor?.get_laters)
-                    global.compositor.get_laters().remove(this._tickId);
-                else
-                    GLib.source_remove(this._tickId);
-            }
-            catch (e) { }
-            this._tickId = 0;
-        }
         this._isAnimating = false;
-        this._springScale.value = 1;
-        this._springScale.velocity = 0;
-        this._springScale.target = 1;
-        this._springPos.value = 1;
-        this._springPos.velocity = 0;
-        this._springPos.target = 1;
+        this._anim?.finish(true);
         try {
             this.menu.actor.remove_all_transitions?.();
             this.menu.actor.opacity = 255;
@@ -3314,6 +4194,8 @@ export class QuickSettingsManager {
         this._setCardBackingsOpacity(0);
         this._removeCardEffects();
         this._stopCardBackingSync();
+        // No return handoff follows: invalidate any queued post-reveal unfreeze.
+        this._frozenUnfreezeGen++;
         try {
             if (this._qsBlurOverlay) {
                 this._qsBlurOverlay.remove_all_transitions();
@@ -3328,23 +4210,8 @@ export class QuickSettingsManager {
         catch (e) { }
     }
     _finishInstantOpenFromSubmenu() {
-        if (this._tickId !== 0) {
-            try {
-                if (global.compositor?.get_laters)
-                    global.compositor.get_laters().remove(this._tickId);
-                else
-                    GLib.source_remove(this._tickId);
-            }
-            catch (e) { }
-            this._tickId = 0;
-        }
         this._isAnimating = false;
-        this._springScale.value = 1;
-        this._springScale.velocity = 0;
-        this._springScale.target = 1;
-        this._springPos.value = 1;
-        this._springPos.velocity = 0;
-        this._springPos.target = 1;
+        this._anim?.finish(true);
         try {
             this.animActor.remove_all_transitions();
             this.animActor.set_scale(1.0, 1.0);
@@ -3365,88 +4232,78 @@ export class QuickSettingsManager {
             this._qsBlurOverlay.opacity = 0;
             this._qsBlurOverlay.hide();
         }
-        // Note: the synchronous _syncGeometry/_syncCardBackings pass is intentionally
-        // deferred to settleFrame1 below. This runs on the same frame the submenu's
-        // close animation begins; pushing it one frame later (QS is hidden here, so
-        // there's no visual difference) avoids a heavy per-card clone sync stalling
-        // the submenu exit.
-        // Multi-frame delayed reveal: keep QS hidden (menu.actor.opacity = 0) while
-        // layout settles, allocation signals fire, and card shapes stabilize.
-        // Frame 1 (BEFORE_REDRAW): layout reflows, notify::allocation fires, classifyCard runs
-        // Frame 2 (BEFORE_REDRAW): re-sync everything with settled positions
-        // Frame 3 (timeout 16ms): final sync and reveal — everything is correct
-        let addLater = (callback) => {
+        // Card effects were kept alive (frozen) across the submenu, but re-apply
+        // synchronously to catch anything the shell rebuilt while hidden, and
+        // force layout so borrowed sliders report real allocation on the settle
+        // frame instead of transient 0-size.
+        try {
+            this._applyCardEffects();
+            this.animActor.queue_relayout?.();
+        }
+        catch (e) { }
+        // Single hidden settle behind the submenu fade: one BEFORE_REDRAW lets
+        // allocation fire, then a move-only sync (frozen snapshot = exact glass,
+        // no clone rebuild to steal fade frames) and the backing timer restarts.
+        // The reveal itself is owned by revealQuickSettingsAfterSubmenu at fade
+        // end — a single reveal point, so content and glass appear together.
+        this._addLaterOnce(() => {
+            if (!this._isEffectActive)
+                return GLib.SOURCE_REMOVE;
             try {
-                if (global.compositor?.get_laters)
-                    return global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, callback);
-            }
-            catch (e) { }
-            return GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, callback);
-        };
-        let finalReveal = () => {
-            try {
-                this._isSubmenuTransitioning = false;
-                // Re-apply card effects to catch any lazy-loaded widgets
-                this._applyCardEffects();
-                this._applyMenuOffsets();
+                if (this._revealEaseGen === 0)
+                    this._applyMenuOffsets();
                 this._syncGeometry();
-                this._syncCardBackings();
-                if (!this._holdSubmenuReveal) {
+                this._syncCardBackings(false, false);
+                // Only complete the open when no return entrance is in flight. The
+                // crossfade hand-off starts the reveal at submenu-close start, so this
+                // deferred settle must not jump the menu to full opacity underneath it.
+                if (!this._holdSubmenuReveal && this._revealEaseGen === 0) {
+                    this._isSubmenuTransitioning = false;
                     this.menu.actor.opacity = 255;
                     this.animActor.opacity = 255;
+                    this._wakeCardBackingSync();
                 }
-                this._wakeCardBackingSync();
+                // When held for a submenu return, the timer stays stopped (nothing
+                // re-syncs a hidden menu); the reveal restarts it.
             }
             catch (e) { }
             return GLib.SOURCE_REMOVE;
-        };
-        let settleFrame2 = () => {
-            try {
-                this._applyMenuOffsets();
-                this._syncGeometry();
-                this._syncCardBackings();
-            }
-            catch (e) { }
-            // Use a short timeout for the final reveal to guarantee at least one
-            // full paint cycle has completed with correct geometry
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, finalReveal);
-            return GLib.SOURCE_REMOVE;
-        };
-        let settleFrame1 = () => {
-            try {
-                this._applyMenuOffsets();
-                this._syncGeometry();
-                this._syncCardBackings();
-            }
-            catch (e) { }
-            addLater(settleFrame2);
-            return GLib.SOURCE_REMOVE;
-        };
-        addLater(settleFrame1);
+        });
     }
     _finishInstantCloseForSubmenu() {
-        if (this._tickId !== 0) {
-            try {
-                if (global.compositor?.get_laters)
-                    global.compositor.get_laters().remove(this._tickId);
-                else
-                    GLib.source_remove(this._tickId);
-            }
-            catch (e) { }
-            this._tickId = 0;
+        // A new submenu handoff cancels any in-flight return entrance: its ease
+        // and tracking frames must not run against the fresh freeze.
+        this._revealEaseGen = 0;
+        try {
+            this.menu.actor.remove_all_transitions?.();
+            this._stampActor?.remove_all_transitions?.();
+            this._qsBlurOverlay?.remove_all_transitions?.();
         }
+        catch (e) { }
         this._isAnimating = false;
-        this._springScale.value = 0;
-        this._springScale.velocity = 0;
-        this._springScale.target = 0;
-        this._springPos.value = 0;
-        this._springPos.velocity = 0;
-        this._springPos.target = 0;
+        this._anim?.finish(false);
         this._stopAdaptiveColorSampling();
         this._stopButtonAlphaSampling();
+        // Submenu handoff: the menu was settled until this frame, so freeze its
+        // live glass instead of destroying it. Backings, clones, card classes and
+        // allocation handlers stay alive; the return path renders live settled
+        // geometry with no rebuild flash. Falls back to full cleanup when there
+        // is nothing live to freeze (e.g. the no-reopen Settings-launch path
+        // already removed cards).
+        let frozeForSubmenu = this._freezeCardBackingsSnapshot();
+        if (frozeForSubmenu) {
+            // Invalidate any still-queued post-reveal unfreeze from a previous
+            // handoff so it cannot clear this fresh snapshot. Stop the sync timer
+            // but keep the freeze: nothing should re-sync (or rebuild clones for) a
+            // hidden menu; the return path restarts the timer on reveal.
+            this._frozenUnfreezeGen++;
+            this._stopCardBackingSync(true);
+        }
+        else {
+            this._removeCardEffects();
+            this._stopCardBackingSync();
+        }
         this._setCardBackingsOpacity(0);
-        this._removeCardEffects();
-        this._stopCardBackingSync();
         try {
             this.animActor.remove_all_transitions();
             this.animActor.set_scale(1.0, 1.0);
@@ -3468,11 +4325,13 @@ export class QuickSettingsManager {
     cleanup() {
         this._isSubmenuTransitioning = false;
         if (this._submenuRenderer) {
-            this._submenuRenderer.close();
+            this._submenuRenderer.destroy();
         }
         // Restore GNOME's original _boxPointer methods first so the forced
         // menu.close(false) inside _removeEffect runs through the original path.
         this._restorePopupAnimPatch?.();
+        // Never leave the popup's input muted after teardown.
+        this._flushPendingRestoreInput();
         this._restorePopupAnimPatch = null;
         if (!this.targetActor) {
             this._pendingMenuClosedCallback = null;
@@ -3490,44 +4349,5 @@ export class QuickSettingsManager {
             }
             catch (e) { }
         }
-    }
-}
-// A straightforward mathematical implementation of Hooke's Law for spring physics
-class Spring {
-    stiffness;
-    damping;
-    mass;
-    value;
-    velocity;
-    target;
-    constructor(stiffness, damping, mass) {
-        this.stiffness = stiffness; // How rigid the spring is (higher = faster, more snappy)
-        this.damping = damping; // Friction (higher = less bounce, settles quicker)
-        this.mass = mass; // Weight of the object
-        this.value = 0; // Current position/scale
-        this.velocity = 0; // Current speed
-        this.target = 0; // Destination value
-    }
-    updateParams(stiffness, damping, mass) {
-        this.stiffness = stiffness; // How rigid the spring is (higher = faster, more snappy)
-        this.damping = damping; // Friction (higher = less bounce, settles quicker)
-        this.mass = mass; // Weight of the object
-    }
-    update(elapsedMs) {
-        // Cap max delta time to prevent the spring from violently exploding during heavy CPU load
-        let dt = elapsedMs / 1000;
-        if (dt > 0.033)
-            dt = 0.033;
-        // F = -k * x
-        let springForce = -this.stiffness * (this.value - this.target);
-        // F = -c * v
-        let dampingForce = -this.damping * this.velocity;
-        // a = F / m
-        let acceleration = (springForce + dampingForce) / this.mass;
-        // Update velocity and position using Euler integration
-        this.velocity += acceleration * dt;
-        this.value += this.velocity * dt;
-        // Return true if the spring has virtually stopped moving and reached its destination
-        return Math.abs(this.velocity) < 0.01 && Math.abs(this.value - this.target) < 0.001;
     }
 }

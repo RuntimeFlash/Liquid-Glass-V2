@@ -56,7 +56,7 @@ export class QuickSettingsLayoutEditor {
     this._selectedKey = this._tiles.find(tile => !tile.hidden)?.key ?? this._tiles[0]?.key ?? null;
     this._dialog = new ModalDialog.ModalDialog({ styleClass: 'liquid-glass-layout-editor-dialog' });
 
-    const content = new St.BoxLayout({ vertical: true, style_class: 'liquid-glass-editor-content', x_expand: true });
+    const content = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style_class: 'liquid-glass-editor-content', x_expand: true });
     content.add_child(new St.Label({ text: 'Edit Controls', style_class: 'liquid-glass-editor-title', x_align: Clutter.ActorAlign.CENTER }));
     content.add_child(new St.Label({
       text: 'Tap to select · Drag a control to move it',
@@ -64,7 +64,7 @@ export class QuickSettingsLayoutEditor {
     }));
 
     const scroll = new St.ScrollView({ style_class: 'liquid-glass-editor-scroll', x_expand: true, y_expand: true });
-    const page = new St.BoxLayout({ vertical: true, style_class: 'liquid-glass-editor-page', x_expand: true });
+    const page = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style_class: 'liquid-glass-editor-page', x_expand: true });
     scroll.set_child(page);
     this._gridWidget = new St.Widget({
       style_class: 'liquid-glass-editor-grid', x_expand: true,
@@ -75,9 +75,9 @@ export class QuickSettingsLayoutEditor {
     this._selectionBar = new St.BoxLayout({ style_class: 'liquid-glass-editor-selection-bar', x_expand: true });
     page.add_child(this._selectionBar);
 
-    const tray = new St.BoxLayout({ vertical: true, style_class: 'liquid-glass-editor-tray', x_expand: true });
+    const tray = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style_class: 'liquid-glass-editor-tray', x_expand: true });
     tray.add_child(new St.Label({ text: 'Hidden controls', style_class: 'liquid-glass-editor-tray-label' }));
-    this._trayInner = new St.BoxLayout({ vertical: true, style_class: 'liquid-glass-editor-tray-inner', x_expand: true });
+    this._trayInner = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style_class: 'liquid-glass-editor-tray-inner', x_expand: true });
     tray.add_child(this._trayInner);
     page.add_child(tray);
     content.add_child(scroll);
@@ -199,7 +199,7 @@ export class QuickSettingsLayoutEditor {
     icon.y_align = Clutter.ActorAlign.CENTER;
     content.add_child(icon);
     if (!isCompact) {
-      const labels = new St.BoxLayout({ vertical: true, x_expand: true, style_class: 'liquid-glass-editor-tile-labels' });
+      const labels = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, x_expand: true, style_class: 'liquid-glass-editor-tile-labels' });
       labels.add_child(new St.Label({ text: tile.title, style_class: 'liquid-glass-editor-tile-title' }));
       labels.add_child(new St.Label({
         text: hidden ? 'Click to restore' : tile.slider ? 'Slider' : '',
