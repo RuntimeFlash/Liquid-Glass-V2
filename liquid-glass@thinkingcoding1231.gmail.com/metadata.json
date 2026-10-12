@@ -1,0 +1,15 @@
+{
+  "name": "Liquid Glass",
+  "description": "Applies a translucent, refractive 'liquid glass' effect (blur, tint, specular highlights and edge lighting) to the top bar and its menus, Quick Settings, notifications, OSDs, Dash to Dock and selected application windows, with adaptive text contrast and extensive customization. Optionally adds a clock with glass digits, weather, calendar and media widgets on the desktop, and a search launcher on glass.\n\nThe weather widget asks Open-Meteo (open-meteo.com) for the forecast only when GNOME Weather is not installed and a place has been chosen in the preferences; the place search in the preferences also uses Open-Meteo.",
+  "uuid": "liquid-glass@thinkingcoding1231.gmail.com",
+  "settings-schema": "org.gnome.shell.extensions.liquid-glass@thinkingcoding1231.gmail.com",
+  "shell-version": [
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "51"
+  ],
+  "url": "https://github.com/ryohsuke1231/liquid-glass"
+}
