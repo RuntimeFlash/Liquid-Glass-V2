@@ -7,7 +7,7 @@ import Clutter from 'gi://Clutter';
  */
 export const UnpickableClone = GObject.registerClass(
   {
-    GTypeName: 'LiquidGlassUnpickableClone',
+    GTypeName: 'LiquidGlassQsUnpickableClone',
   },
   class UnpickableClone extends Clutter.Clone {
     vfunc_pick(_pickContext: any): void {
@@ -20,7 +20,7 @@ export const UnpickableClone = GObject.registerClass(
  */
 export const UnpickableActor = GObject.registerClass(
   {
-    GTypeName: 'LiquidGlassUnpickableActor',
+    GTypeName: 'LiquidGlassQsUnpickableActor',
   },
   class UnpickableActor extends Clutter.Actor {
     vfunc_pick(_pickContext: any): void {

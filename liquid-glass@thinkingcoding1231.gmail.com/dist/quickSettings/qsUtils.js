@@ -6,7 +6,7 @@ import Clutter from 'gi://Clutter';
  * A Clutter.Clone the Looking Glass picker passes through.
  */
 export const UnpickableClone = GObject.registerClass({
-    GTypeName: 'LiquidGlassUnpickableClone',
+    GTypeName: 'LiquidGlassQsUnpickableClone',
 }, class UnpickableClone extends Clutter.Clone {
     vfunc_pick(_pickContext) {
         // Picks fall through to the actors behind.
@@ -17,7 +17,7 @@ export const UnpickableClone = GObject.registerClass({
  * A container the picker passes through, along with all of its children.
  */
 export const UnpickableActor = GObject.registerClass({
-    GTypeName: 'LiquidGlassUnpickableActor',
+    GTypeName: 'LiquidGlassQsUnpickableActor',
 }, class UnpickableActor extends Clutter.Actor {
     vfunc_pick(_pickContext) {
         // Picks fall through to the actors behind.

@@ -15,7 +15,7 @@ interface BackdropBlurEffectParams {
 // applies the actor's animated opacity, so fading the overlay fades the blur
 // in lockstep with the Quick Settings animation.
 export const BackdropBlurEffect = GObject.registerClass({
-  GTypeName: 'LiquidGlassBackdropBlurEffect',
+  GTypeName: 'LiquidGlassQsBackdropBlurEffect',
 }, class BackdropBlurEffect extends Clutter.ShaderEffect {
   _init(params: BackdropBlurEffectParams) {
     delete params.extensionPath;

@@ -6,7 +6,7 @@ import { SHELL_MAJOR } from '../shellVersion.js';
 
 // Register the custom shader effect class with GObject system.
 export const LiquidEffect = GObject.registerClass({
-    GTypeName: 'LiquidGlassEffect',
+    GTypeName: 'LiquidGlassQsEffect',
 }, class LiquidEffect extends Clutter.ShaderEffect {
     _settings;
     _settingsIds;

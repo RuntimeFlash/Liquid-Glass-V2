@@ -13,7 +13,7 @@ interface LiquidEffectParams {
 
 // Register the custom shader effect class with GObject system.
 export const LiquidEffect = GObject.registerClass({
-  GTypeName: 'LiquidGlassEffect',
+  GTypeName: 'LiquidGlassQsEffect',
 }, class LiquidEffect extends Clutter.ShaderEffect {
   private _settings!: Gio.Settings | undefined;
   private _settingsIds!: number[];
