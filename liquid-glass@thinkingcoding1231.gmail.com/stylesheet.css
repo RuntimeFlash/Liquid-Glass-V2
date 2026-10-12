@@ -255,3 +255,764 @@
 .liquid-glass-launcher .lg-launcher-detail {
     font-size: 9.5pt;
 }
+
+/* Quick Settings: custom grid, cards, floating submenus and the layout
+ * editor, ported from the v2 tree. */
+.liquid-glass-qs-root .quick-slider {
+    background-color: transparent !important;
+    border-radius: 20px !important;
+    padding: 24px 24px !important;
+    margin-bottom: 8px !important;
+    box-shadow: none !important;
+}
+.quick-toggle-menu,
+.quick-settings-submenu,
+.quick-settings-menu,
+.liquid-glass-qs-root,
+.liquid-glass-qs-root .popup-menu-content,
+.liquid-glass-qs-root .quick-settings,
+.liquid-glass-menu-active.popup-menu-content,
+.liquid-glass-menu-active .popup-menu-content {
+    background-color: transparent !important;
+    background-image: none !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+.liquid-glass-card {
+    background-color: transparent !important;
+    border-color: transparent !important;
+    box-shadow: none !important;
+}
+.liquid-glass-card-backing {
+    background-color: transparent !important;
+    border: none !important;
+    border-radius: 18px !important;
+    box-shadow: none !important;
+}
+.liquid-glass-card-circle {
+    border-radius: 999px !important;
+}
+.liquid-glass-card-pill {
+    border-radius: 999px !important;
+}
+.liquid-glass-card-rect {
+    border-radius: 18px !important;
+}
+.liquid-glass-card-compact {
+}
+.quick-toggle.liquid-glass-card,
+.quick-menu-toggle.liquid-glass-card,
+.liquid-glass-card.quick-toggle,
+.liquid-glass-card.quick-menu-toggle {
+    background-color: transparent !important;
+    border-color: transparent !important;
+    border-radius: 18px !important;
+    box-shadow: none !important;
+}
+.quick-toggle.liquid-glass-card-toggle,
+.quick-menu-toggle.liquid-glass-card-toggle,
+.liquid-glass-card-toggle.quick-toggle,
+.liquid-glass-card-toggle.quick-menu-toggle {
+}
+.liquid-glass-card-slider {
+    border-radius: 999px !important;
+}
+.liquid-glass-qs-root .liquid-glass-card StButton,
+.liquid-glass-qs-root .liquid-glass-card StButton:hover,
+.liquid-glass-qs-root .liquid-glass-card StButton:active,
+.liquid-glass-qs-root .liquid-glass-card StButton:checked,
+.liquid-glass-qs-root .liquid-glass-card StButton:focus,
+.liquid-glass-qs-root .liquid-glass-card .button,
+.liquid-glass-qs-root .liquid-glass-card .button:hover,
+.liquid-glass-qs-root .liquid-glass-card .button:active,
+.liquid-glass-qs-root .liquid-glass-card .button:checked,
+.liquid-glass-qs-root .liquid-glass-card .button:focus,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle:hover,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle:active,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle:checked,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle:focus,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-button,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-button:hover,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-button:active,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-button:checked,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-button:focus,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-arrow,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-arrow:hover,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-arrow:active,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-arrow:checked,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-arrow:focus,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-menu-button,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-menu-button:hover,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-menu-button:active,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-menu-button:checked,
+.liquid-glass-qs-root .liquid-glass-card .quick-toggle-menu-button:focus {
+    background-color: transparent !important;
+    background-image: none !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-button,
+.liquid-glass-qs-root .quick-menu-toggle .button,
+.liquid-glass-qs-root .quick-menu-toggle,
+.liquid-glass-qs-root .quick-toggle-box {
+    border: none !important;
+    box-shadow: none !important;
+    outline: none !important;
+    background-color: transparent !important;
+    background-image: none !important;
+    border-radius: 18px !important; /* Ensure the right side is rounded */
+}
+.liquid-glass-qs-root .quick-menu-toggle:hover,
+.liquid-glass-qs-root .quick-menu-toggle:focus,
+.liquid-glass-qs-root .quick-menu-toggle:active,
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-button:hover,
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-button:focus,
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-button:active,
+.liquid-glass-qs-root .quick-menu-toggle .button:hover,
+.liquid-glass-qs-root .quick-menu-toggle .button:focus,
+.liquid-glass-qs-root .quick-menu-toggle .button:active,
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-box:hover,
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-box:focus,
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-box:active {
+    background-color: transparent !important;
+    background-image: none !important;
+    border: none !important;
+    box-shadow: none !important;
+    outline: none !important;
+    border-radius: 18px !important;
+}
+.liquid-glass-qs-root .liquid-glass-card-circle:hover,
+.liquid-glass-qs-root .liquid-glass-card-circle:focus,
+.liquid-glass-qs-root .liquid-glass-card-circle:active {
+    border-radius: 999px !important;
+}
+.liquid-glass-qs-root .quick-menu-toggle.liquid-glass-menu-toggle-has-arrow .quick-toggle-button,
+.liquid-glass-qs-root .quick-menu-toggle.liquid-glass-menu-toggle-has-arrow .button,
+.liquid-glass-qs-root .quick-menu-toggle.liquid-glass-menu-toggle-has-arrow .quick-toggle-box {
+    padding-right: 30px !important;
+}
+.liquid-glass-qs-root .quick-menu-toggle.liquid-glass-menu-toggle-has-arrow StLabel {
+    max-width: 104px !important;
+}
+.liquid-glass-qs-root .quick-menu-toggle.liquid-glass-menu-toggle-has-arrow.liquid-glass-card-compact StLabel {
+    max-width: 92px !important;
+}
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-separator,
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-separator:hover,
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-separator:active,
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-separator:focus {
+    width: 0px !important;
+    min-width: 0px !important;
+    max-width: 0px !important;
+    padding: 0px !important;
+    margin: 0px !important;
+    border: none !important;
+    border-left-width: 0px !important;
+    border-right-width: 0px !important;
+    background-color: transparent !important;
+    opacity: 0 !important;
+}
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-arrow,
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-menu-button,
+.liquid-glass-qs-root .quick-menu-toggle .quick-toggle-menu-button StIcon,
+.liquid-glass-qs-root .quick-menu-toggle .icon-button {
+    width: 0px !important;
+    min-width: 0px !important;
+    max-width: 0px !important;
+    padding: 0px !important;
+    margin: 0px !important;
+    border: none !important;
+    border-left-width: 0px !important;
+    border-right-width: 0px !important;
+    box-shadow: none !important;
+    background-color: transparent !important;
+    background-image: none !important;
+    opacity: 0 !important;
+}
+.liquid-glass-custom-menu-arrow {
+    min-width: 22px !important;
+    max-width: 22px !important;
+    min-height: 22px !important;
+    max-height: 22px !important;
+    border: none !important;
+    box-shadow: none !important;
+    background-color: transparent !important;
+}
+.liquid-glass-custom-menu-arrow-icon {
+    icon-size: 14px !important;
+    color: rgba(255, 255, 255, 0.88) !important;
+    -st-icon-foreground-color: rgba(255, 255, 255, 0.88) !important;
+}
+.quick-toggle.liquid-glass-card:hover,
+.quick-menu-toggle.liquid-glass-card:hover,
+.liquid-glass-card.quick-toggle:hover,
+.liquid-glass-card.quick-menu-toggle:hover,
+.liquid-glass-card:hover {
+    background-color: transparent !important;
+}
+.liquid-glass-card-backing:hover {
+    background-color: transparent !important;
+}
+.liquid-glass-card.checked,
+.quick-toggle.liquid-glass-card:checked,
+.quick-toggle.liquid-glass-card.checked,
+.quick-menu-toggle.liquid-glass-card:checked,
+.quick-menu-toggle.liquid-glass-card.checked {
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+.liquid-glass-qs-root .quick-toggle:not(.quick-menu-toggle) {
+    min-width: 68px !important;
+    max-width: 68px !important;
+    min-height: 68px !important;
+    max-height: 68px !important;
+    border-radius: 999px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+.liquid-glass-qs-root .quick-toggle:not(.quick-menu-toggle) StLabel {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    opacity: 0 !important;
+}
+.liquid-glass-qs-root .quick-toggle:not(.quick-menu-toggle) StIcon {
+    margin: auto !important;
+    icon-size: 22px !important;
+}
+.liquid-glass-card-backing.checked {
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+.liquid-glass-card-backing.checked:hover {
+    background-color: transparent !important;
+}
+.liquid-glass-qs-root .liquid-glass-card.checked StLabel,
+.liquid-glass-qs-root .liquid-glass-card.checked StIcon {
+    color: #ffffff !important;
+    -st-icon-foreground-color: #ffffff !important;
+}
+.quick-slider.liquid-glass-card .slider {
+    height: 22px !important;
+    -barlevel-height: 22px !important;
+    -slider-handle-radius: 0px !important;
+    -slider-handle-border-width: 0px !important;
+    -barlevel-background-color: rgba(255, 255, 255, 0.15) !important;
+    -barlevel-active-background-color: rgba(255, 255, 255, 0.80) !important;
+    border-radius: 11px !important;
+    border: none !important;
+}
+.quick-slider.liquid-glass-card {
+}
+.liquid-glass-custom-quick-settings {
+    min-width: 350px !important;
+    max-width: 350px !important;
+    spacing: 10px !important;
+}
+.liquid-glass-custom-grid {
+    spacing-rows: 10px !important;
+    spacing-columns: 10px !important;
+}
+.liquid-glass-custom-card {
+    min-width: 0 !important;
+    min-height: 68px !important;
+    max-height: 68px !important;
+    padding: 0 !important;
+    border: none !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+}
+.liquid-glass-custom-card-single,
+.liquid-glass-custom-card-footer {
+    min-width: 68px !important;
+    max-width: 68px !important;
+    min-height: 68px !important;
+    max-height: 68px !important;
+    border-radius: 999px !important;
+}
+.liquid-glass-custom-card-wide {
+    min-height: 66px !important;
+    max-height: 66px !important;
+    padding: 0 !important;
+}
+.liquid-glass-custom-card-squircle,
+.liquid-glass-card-squircle,
+.liquid-glass-card-backing.liquid-glass-card-squircle {
+    border-radius: 36px !important;
+}
+.liquid-glass-custom-card-pill {
+    border-radius: 999px !important;
+}
+.liquid-glass-custom-card-footer.liquid-glass-custom-card-squircle {
+    min-width: 0 !important;
+    max-width: none !important;
+}
+.liquid-glass-custom-card-content {
+    spacing: 8px !important;
+    padding: 14px !important;
+}
+.liquid-glass-custom-card-single .liquid-glass-custom-card-content,
+.liquid-glass-custom-card-footer .liquid-glass-custom-card-content {
+    padding: 0 !important;
+}
+.liquid-glass-custom-card-icon {
+    icon-size: 16px !important;
+}
+.liquid-glass-custom-card-wide .liquid-glass-custom-card-icon {
+    icon-size: 15px !important;
+}
+.liquid-glass-custom-card-labels {
+    spacing: 1px !important;
+}
+.liquid-glass-custom-card-title {
+    font-weight: 700 !important;
+    font-size: 13px !important;
+}
+.liquid-glass-custom-card-subtitle {
+    font-size: 11px !important;
+    opacity: 0.7;
+}
+.liquid-glass-custom-slider {
+    margin: 0 !important;
+    padding: 0 14px !important;
+    min-height: 56px !important;
+    max-height: 56px !important;
+    border-radius: 999px !important;
+}
+.liquid-glass-qs-root .quick-slider.liquid-glass-custom-slider {
+    margin-bottom: 0 !important;
+    padding: 0 14px !important;
+}
+.liquid-glass-qs-root .quick-slider.liquid-glass-custom-slider .slider {
+    height: 18px !important;
+    -barlevel-height: 18px !important;
+    border-radius: 9px !important;
+    -slider-handle-radius: 0px !important;
+    -slider-handle-border-width: 0px !important;
+}
+.liquid-glass-custom-footer {
+    margin-top: 0 !important;
+}
+.liquid-glass-scrim {
+    background-color: rgba(0, 0, 0, 0.34) !important;
+}
+.liquid-glass-floating-window-container {
+    border-radius: 28px !important;
+    border: none !important;
+    box-shadow: none !important;
+    background-color: transparent !important;
+    background-image: none !important;
+}
+.liquid-glass-floating-window-backing {
+    border-radius: 28px !important;
+}
+.liquid-glass-floating-window-layout {
+    padding: 8px 10px !important;
+}
+.liquid-glass-control-panel {
+    spacing: 0px !important;
+}
+.liquid-glass-floating-window-content {
+    background-color: transparent !important;
+    background-image: none !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+.liquid-glass-control-scroll {
+    background-color: transparent !important;
+    background-image: none !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+.liquid-glass-control-scroll StScrollBar {
+    min-width: 0px !important;
+    max-width: 0px !important;
+    opacity: 0 !important;
+}
+.liquid-glass-control-list {
+    spacing: 0px !important;
+    border-radius: 0px !important;
+    background-color: transparent !important;
+    border: none !important;
+    padding: 0px !important;
+}
+.liquid-glass-control-row {
+    min-height: 33px !important;
+    padding: 4px 8px !important;
+    border-radius: 0px !important;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    transition-duration: 160ms !important;
+}
+.liquid-glass-control-row:hover {
+    background-color: rgba(255, 255, 255, 0.12) !important;
+}
+.liquid-glass-control-row:active,
+.liquid-glass-control-row:focus {
+    background-color: rgba(255, 255, 255, 0.16) !important;
+}
+.liquid-glass-control-row-active {
+    background-color: transparent !important;
+    border: none !important;
+}
+.liquid-glass-control-row-active:hover {
+    background-color: rgba(255, 255, 255, 0.12) !important;
+}
+.liquid-glass-control-row-pending {
+    background-color: rgba(255, 255, 255, 0.09) !important;
+}
+.liquid-glass-control-row-switch {
+    min-height: 36px !important;
+}
+.liquid-glass-control-row-switch .liquid-glass-control-icon {
+    background-color: rgba(255, 255, 255, 0.20) !important;
+}
+.liquid-glass-control-row-switch.liquid-glass-control-row-active .liquid-glass-control-icon {
+    background-color: #0a84ff !important;
+}
+.liquid-glass-control-switch {
+    min-width: 39px !important;
+    max-width: 39px !important;
+    min-height: 22px !important;
+    max-height: 22px !important;
+    border-radius: 999px !important;
+    background-color: rgba(120, 120, 128, 0.55) !important;
+    border: 1px solid rgba(255, 255, 255, 0.18) !important;
+    margin-left: 8px !important;
+}
+.liquid-glass-control-switch-active {
+    background-color: #0a84ff !important;
+    border-color: #0a84ff !important;
+}
+.liquid-glass-control-switch-knob {
+    min-width: 18px !important;
+    max-width: 18px !important;
+    min-height: 18px !important;
+    max-height: 18px !important;
+    border-radius: 999px !important;
+    background-color: #ffffff !important;
+}
+.liquid-glass-control-row-box {
+    spacing: 8px !important;
+}
+.liquid-glass-control-icon {
+    min-width: 22px !important;
+    min-height: 22px !important;
+    max-width: 22px !important;
+    max-height: 22px !important;
+    border-radius: 999px !important;
+    background-color: rgba(255, 255, 255, 0.88) !important;
+}
+.liquid-glass-control-icon-active {
+    background-color: #0a84ff !important;
+}
+.liquid-glass-control-icon-pending {
+    background-color: rgba(10, 132, 255, 0.55) !important;
+}
+.liquid-glass-control-icon-symbol {
+    icon-size: 12px !important;
+    color: rgba(20, 20, 24, 0.88) !important;
+    -st-icon-foreground-color: rgba(20, 20, 24, 0.88) !important;
+}
+.liquid-glass-control-icon-active .liquid-glass-control-icon-symbol {
+    color: #ffffff !important;
+    -st-icon-foreground-color: #ffffff !important;
+}
+.liquid-glass-control-labels {
+    spacing: 0px !important;
+}
+.liquid-glass-control-section-row {
+    spacing: 6px !important;
+    padding: 5px 8px 3px 8px !important;
+}
+.liquid-glass-control-section-spinner {
+    min-width: 12px !important;
+    max-width: 12px !important;
+    min-height: 12px !important;
+    max-height: 12px !important;
+}
+.liquid-glass-control-title {
+    color: #ffffff !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+}
+.liquid-glass-control-subtitle {
+    color: rgba(255, 255, 255, 0.62) !important;
+    font-size: 10px !important;
+}
+.liquid-glass-control-subtitle-active {
+    color: rgba(255, 255, 255, 0.72) !important;
+}
+.liquid-glass-control-subtitle-pending {
+    color: rgba(160, 210, 255, 0.95) !important;
+}
+.liquid-glass-control-action {
+    color: rgba(255, 255, 255, 0.75) !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+}
+.liquid-glass-control-action-active {
+    color: #ffffff !important;
+}
+.liquid-glass-control-check {
+    icon-size: 13px !important;
+    color: #0a84ff !important;
+    -st-icon-foreground-color: #0a84ff !important;
+    margin-left: 8px !important;
+}
+.liquid-glass-control-spinner {
+    min-width: 16px !important;
+    max-width: 16px !important;
+    min-height: 16px !important;
+    max-height: 16px !important;
+    margin-left: 8px !important;
+}
+.liquid-glass-control-divider {
+    min-height: 1px !important;
+    max-height: 1px !important;
+    background-color: rgba(255, 255, 255, 0.12) !important;
+    margin: 5px 10px !important;
+}
+.liquid-glass-control-section {
+    color: rgba(255, 255, 255, 0.62) !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    padding: 7px 8px 3px 8px !important;
+}
+.liquid-glass-control-palette-dark .liquid-glass-control-title {
+    color: rgba(255, 255, 255, 0.96) !important;
+}
+.liquid-glass-control-palette-dark .liquid-glass-control-subtitle,
+.liquid-glass-control-palette-dark .liquid-glass-control-section {
+    color: rgba(255, 255, 255, 0.68) !important;
+}
+.liquid-glass-control-palette-dark .liquid-glass-control-action,
+.liquid-glass-control-palette-dark .liquid-glass-control-check {
+    color: rgba(93, 173, 255, 0.98) !important;
+    -st-icon-foreground-color: rgba(93, 173, 255, 0.98) !important;
+}
+.liquid-glass-control-palette-light .liquid-glass-control-title {
+    color: rgba(18, 18, 20, 0.94) !important;
+}
+.liquid-glass-control-palette-light .liquid-glass-control-subtitle,
+.liquid-glass-control-palette-light .liquid-glass-control-section {
+    color: rgba(18, 18, 20, 0.64) !important;
+}
+.liquid-glass-control-palette-light .liquid-glass-control-icon {
+    background-color: rgba(0, 0, 0, 0.12) !important;
+}
+.liquid-glass-control-palette-light .liquid-glass-control-icon-symbol {
+    color: rgba(18, 18, 20, 0.88) !important;
+    -st-icon-foreground-color: rgba(18, 18, 20, 0.88) !important;
+}
+.liquid-glass-control-palette-light .liquid-glass-control-icon-active,
+.liquid-glass-control-palette-light .liquid-glass-control-row-switch.liquid-glass-control-row-active .liquid-glass-control-icon {
+    background-color: #0a84ff !important;
+}
+.liquid-glass-control-palette-light .liquid-glass-control-icon-active .liquid-glass-control-icon-symbol,
+.liquid-glass-control-palette-light .liquid-glass-control-row-switch.liquid-glass-control-row-active .liquid-glass-control-icon-symbol {
+    color: #ffffff !important;
+    -st-icon-foreground-color: #ffffff !important;
+}
+.liquid-glass-control-palette-light .liquid-glass-control-action,
+.liquid-glass-control-palette-light .liquid-glass-control-check {
+    color: #006bd6 !important;
+    -st-icon-foreground-color: #006bd6 !important;
+}
+.liquid-glass-custom-edit-button {
+    min-height: 26px !important;
+    padding: 5px 20px !important;
+    border-radius: 999px !important;
+    background-color: rgba(255, 255, 255, 0.14) !important;
+    color: #ffffff !important;
+    font-size: 12px !important;
+    font-weight: 700 !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+.liquid-glass-custom-edit-button:hover {
+    background-color: rgba(255, 255, 255, 0.22) !important;
+}
+.liquid-glass-custom-edit-button:active {
+    background-color: rgba(255, 255, 255, 0.30) !important;
+}
+.liquid-glass-layout-editor-dialog {
+    width: 470px;
+}
+.liquid-glass-editor-content {
+    spacing: 10px !important;
+    padding: 8px !important;
+}
+.liquid-glass-editor-title {
+    font-size: 16px !important;
+    font-weight: 800 !important;
+    color: #ffffff !important;
+}
+.liquid-glass-editor-hint {
+    font-size: 11px !important;
+    color: rgba(255, 255, 255, 0.65) !important;
+}
+.liquid-glass-editor-scroll {
+    max-height: 480px !important;
+}
+.liquid-glass-editor-page {
+    spacing: 14px !important;
+    padding: 6px 2px !important;
+}
+.liquid-glass-editor-grid {
+    min-height: 60px !important;
+}
+.liquid-glass-editor-tile {
+    background-color: rgba(255, 255, 255, 0.12) !important;
+    border-radius: 999px !important;
+    min-width: 68px !important;
+    max-width: 68px !important;
+    min-height: 68px !important;
+    max-height: 68px !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+.liquid-glass-editor-tile-wide {
+    max-width: none !important;
+    border-radius: 36px !important;
+}
+.liquid-glass-editor-tile-selected {
+    background-color: rgba(10, 132, 255, 0.28) !important;
+    border: 1px solid rgba(110, 190, 255, 0.86) !important;
+    box-shadow: 0 0 18px rgba(10, 132, 255, 0.22) !important;
+}
+.liquid-glass-editor-tile-dragging {
+    border: 1px dashed rgba(130, 204, 255, 0.9) !important;
+    background-color: rgba(10, 132, 255, 0.16) !important;
+}
+.liquid-glass-editor-drop-target {
+    box-shadow: 0 0 0 2px #0a84ff, 0 0 20px rgba(10, 132, 255, 0.48) !important;
+    background-color: rgba(10, 132, 255, 0.30) !important;
+}
+.liquid-glass-editor-ghost {
+    opacity: 220 !important;
+    border: 2px solid rgba(180, 230, 255, 0.92) !important;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.38) !important;
+}
+.liquid-glass-editor-drag-handle {
+    min-width: 26px !important;
+    min-height: 30px !important;
+    padding: 0 !important;
+    border-radius: 14px !important;
+    color: rgba(255, 255, 255, 0.72) !important;
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    font-size: 17px !important;
+}
+.liquid-glass-editor-drag-handle:hover {
+    background-color: rgba(255, 255, 255, 0.18) !important;
+    color: #ffffff !important;
+}
+.liquid-glass-editor-selection-bar {
+    spacing: 8px !important;
+    padding: 8px 10px !important;
+    margin-top: 8px !important;
+    min-height: 34px !important;
+    border-radius: 18px !important;
+    background-color: rgba(255, 255, 255, 0.08) !important;
+}
+.liquid-glass-editor-selection-title {
+    color: rgba(255, 255, 255, 0.88) !important;
+    font-size: 12px !important;
+    font-weight: 700 !important;
+    padding: 7px 2px !important;
+}
+.liquid-glass-editor-tool {
+    min-height: 30px !important;
+    padding: 5px 10px !important;
+    border-radius: 999px !important;
+    background-color: rgba(255, 255, 255, 0.12) !important;
+    color: #ffffff !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+}
+.liquid-glass-editor-tool:hover {
+    background-color: rgba(255, 255, 255, 0.22) !important;
+}
+.liquid-glass-editor-tool:disabled {
+    opacity: 0.35 !important;
+}
+.liquid-glass-editor-tool-primary {
+    background-color: #0a84ff !important;
+}
+.liquid-glass-editor-tool-danger {
+    background-color: rgba(255, 89, 89, 0.20) !important;
+}
+.liquid-glass-editor-tile-hidden {
+    opacity: 1 !important;
+    background-color: rgba(255, 255, 255, 0.16) !important;
+    border: 1px dashed rgba(255, 255, 255, 0.28) !important;
+}
+.liquid-glass-editor-tile-content {
+    spacing: 8px !important;
+    padding: 12px !important;
+}
+.liquid-glass-editor-tile-single .liquid-glass-editor-tile-content {
+    padding: 0 !important;
+}
+.liquid-glass-editor-tile-icon {
+    icon-size: 24px !important;
+    color: #ffffff !important;
+}
+.liquid-glass-editor-tile-labels {
+    spacing: 1px !important;
+}
+.liquid-glass-editor-tile-title {
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    color: #ffffff !important;
+}
+.liquid-glass-editor-tile-subtitle {
+    font-size: 11px !important;
+    color: rgba(255, 255, 255, 0.7) !important;
+}
+.liquid-glass-editor-tray {
+    spacing: 8px !important;
+    padding: 10px !important;
+    margin-top: 18px !important;
+    border-radius: 24px !important;
+    background-color: rgba(0, 0, 0, 0.28) !important;
+}
+.liquid-glass-editor-tray-label {
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    color: rgba(255, 255, 255, 0.6) !important;
+}
+.liquid-glass-editor-tray-inner {
+    min-height: 0 !important;
+    spacing: 8px !important;
+}
+.liquid-glass-editor-tray-highlight {
+    background-color: rgba(10, 132, 255, 0.22) !important;
+    border: 1px dashed rgba(10, 132, 255, 0.6) !important;
+}
+.liquid-glass-editor-actions {
+    spacing: 12px !important;
+}
+.liquid-glass-editor-action {
+    min-height: 30px !important;
+    padding: 6px 18px !important;
+    border-radius: 999px !important;
+    background-color: rgba(255, 255, 255, 0.14) !important;
+    color: #ffffff !important;
+    font-size: 12px !important;
+    font-weight: 700 !important;
+}
+.liquid-glass-editor-action:hover {
+    background-color: rgba(255, 255, 255, 0.22) !important;
+}
+.liquid-glass-editor-action-primary {
+    background-color: #0a84ff !important;
+}
+.liquid-glass-editor-action-primary:hover {
+    background-color: #2f95ff !important;
+}

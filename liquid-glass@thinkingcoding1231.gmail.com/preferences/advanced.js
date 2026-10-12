@@ -17,12 +17,9 @@ function addMotion(group, controls, surface) {
       'The glass leaves the button as a drop and stretches into the menu');
   // Spring constants and intervals mean their number; no slider.
   const rows = addNumbers(group, controls, SPRING, `${surface}-`, false);
-  const keys = surface === 'quick-settings' ? [key, 'quick-settings-apply-to'] : [key];
-  controls.watch(keys, () => {
-    const panel = surface !== 'quick-settings' || controls.settings.get_value('quick-settings-apply-to').deep_unpack() === 0;
-    toggle.visible = panel;
+  controls.watch([key], () => {
     if (grow) grow.visible = controls.settings.get_boolean(key);
-    for (const row of rows.values()) row.visible = panel && controls.settings.get_boolean(key);
+    for (const row of rows.values()) row.visible = controls.settings.get_boolean(key);
   });
 }
 
@@ -37,14 +34,6 @@ function addLayout(group, controls, surface, appearance) {
     controls.watch(['top-bar-style'], () => {
       const shown = controls.settings.get_value('top-bar-style').deep_unpack() !== 'off';
       for (const row of rows.values()) row.visible = shown;
-    });
-  }
-  if (surface === 'quick-settings') {
-    controls.watch(['quick-settings-apply-to'], () => {
-      const buttons = controls.settings.get_value('quick-settings-apply-to').deep_unpack() === 1;
-      for (const key of ['toggle-tint-strength', 'toggle-corner-radius']) rows.get(key).visible = buttons;
-      for (const key of ['x-offset', 'y-offset']) rows.get(key).visible = !buttons;
-      appearance.get('corner-radius').visible = !buttons;
     });
   }
 }

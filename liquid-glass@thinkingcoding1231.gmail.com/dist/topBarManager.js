@@ -1,5 +1,6 @@
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
+import GLib from 'gi://GLib';
 import { BackdropGlass } from './rendering/backdropGlass.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { isActorValid } from './actors/lifecycle.js';
@@ -36,6 +37,10 @@ export class TopBarManager {
     // The bar and its boxes, with the inline styles they had before ours.
     _savedStyles = [];
     _panelStyleId = 0;
+    // Writing the bar's inline style re-emits style-changed; the handler must not
+    // run _applyLayout() from inside its own write, or the two can feed each other.
+    _applyingLayout = false;
+    _layoutIdleId = 0;
     _margin = { top: 0, bottom: 0, left: 0, right: 0 };
     _padding = { top: 0, bottom: 0, left: 0, right: 0 };
 
@@ -92,7 +97,7 @@ export class TopBarManager {
         this._lastKey = '';
         this._savedStyles = [panel, panel._leftBox, panel._centerBox, panel._rightBox].map(actor => [actor, actor.get_style()]);
         // The theme can change the bar's height under us.
-        this._panelStyleId = panel.connect('style-changed', () => this._applyLayout());
+        this._panelStyleId = panel.connect('style-changed', () => this._scheduleLayout());
         this._applyLayout();
         startSyncLoop(this._frameSignalSlot, this._frameSlot, {
             // At shell shutdown the stage destroys the glass before we are told.
@@ -127,8 +132,18 @@ export class TopBarManager {
     // The bar grows by the margin and padding so the buttons keep the theme's
     // height, and its boxes are padded to put the buttons inside the pills.
     _applyLayout() {
-        if (!this._glass)
+        if (!this._glass || this._applyingLayout)
             return;
+        this._applyingLayout = true;
+        try {
+            this._writeLayout();
+        }
+        finally {
+            this._applyingLayout = false;
+        }
+    }
+
+    _writeLayout() {
         const panel = Main.panel;
         const margin = this._margin = this._insets('margin');
         const padding = this._padding = this._insets('padding');
@@ -153,6 +168,18 @@ export class TopBarManager {
             const own = original?.trim().replace(/;$/, '');
             actor.set_style(own ? `${own}; ${style}` : style);
         }
+    }
+
+    // Deferred so a style-changed emitted by our own write lands after the write,
+    // and coalesced so a burst of theme changes becomes one pass.
+    _scheduleLayout() {
+        if (this._layoutIdleId)
+            return;
+        this._layoutIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._layoutIdleId = 0;
+            this._applyLayout();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _syncText() {
@@ -257,6 +284,10 @@ export class TopBarManager {
         if (this._panelStyleId)
             Main.panel.disconnect(this._panelStyleId);
         this._panelStyleId = 0;
+        if (this._layoutIdleId) {
+            GLib.Source.remove(this._layoutIdleId);
+            this._layoutIdleId = 0;
+        }
         for (const [actor, style] of this._savedStyles)
             if (isActorValid(actor))
                 actor.set_style(style);

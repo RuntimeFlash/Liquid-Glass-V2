@@ -55,17 +55,9 @@ Desktop Menu:
 
 ![Desktop Menu Screenshot](assets/desktopmenu.png)
 
-Quick Settings (Background mode, Adwaita theme):
+Quick Settings (custom glass grid, Adwaita theme):
 
-![Quick Settings Background Mode with Adwaita Screenshot](assets/qs-adwaita-whole.png)
-
-Quick Settings (Toggle mode, Adwaita theme):
-
-![Quick Settings Toggle Mode with Adwaita Screenshot](assets/qs-adwaita-toggles.png)
-
-Quick Settings (Toggle mode, MacTahoe theme):
-
-![Quick Settings Toggle Mode with MacTahoe Screenshot](assets/quicksettings-mactahoe.png)
+![Quick Settings Screenshot](assets/qs-adwaita-whole.png)
 
 Application Windows:
 
@@ -122,7 +114,7 @@ The effect can be enabled or disabled per UI element on the **Effects** page. In
 | **Application Icons** | The icons in Dash to Dock (the Show Apps button too), in the launcher's results and in the overview's app grid, redrawn as glass plates under a one-color symbol, as in macOS 26 and iOS 26. See [Glass Icons](#glass-icons). Off by default. |
 | **Calendar & Other Top Bar Menus** | Glass behind the calendar (clock) menu and behind the menus of the other top bar indicators — the keyboard layout and accessibility menus, and the indicators other extensions add, including [ArcMenu](https://gitlab.com/arcmenu/ArcMenu)'s menu and its right-click menu. Each detected menu can be switched off on its own. Menus **grow out of their button**, after [liquid-dom](https://github.com/AndrewPrifer/liquid-dom)'s menu demo: the button's highlight drops out of the button and rounds off into a drop of glass, which is thrown out to where the menu will be — each time with a small push in a random downward direction — and swells into the menu, its items coming up through the glass, seen bent by its rim at first. Closing runs it back: the menu shrinks into a drop that rises into the button, widening into its highlight on the way, and fades once it has become the highlight. Off by default (Appearance → Behavior → "Menus grow from their button"). With that off, a **custom spring animation** (stiffness / damping / mass) scales the menu instead. Also supports **adaptive text coloring**. |
 | **Notifications** | Glass behind notification banners. Supports **adaptive text coloring** and a hide safety margin to avoid flicker while the banner is dismissed. |
-| **Quick Settings** | Two modes: **Whole menu** applies one sheet of glass behind the whole panel, and **Individual buttons** turns every toggle button into its own piece of glass, keeping each toggle's own accent color (see "Button base color"). Also supports spring animation and adaptive text coloring. |
+| **Quick Settings** | Draws the panel as a custom grid of glass cards, each mirroring a native quick setting, with a frosted sheet behind the whole menu. Tapping a card that has more to it (Wi-Fi, Bluetooth, power mode, caffeine) opens a floating **submenu** of glass rows — network and device lists, switches and system actions. A **layout editor** (from the menu's edit button) reorders, resizes and hides cards and saves the layout. Supports spring animation and adaptive text coloring. |
 | **OSD** | Glass behind the on-screen displays (volume, brightness, and so on), with adaptive text coloring. |
 | **Application Windows** | Glass behind application windows, with a **window content opacity** slider so the glass shows through the window itself. Applies either to selected applications, or to all windows minus exclusions. Both lists are filled from a live picker of your currently open windows, so there is no need to look up `WM_CLASS` values by hand. |
 
@@ -142,10 +134,11 @@ No icon is redrawn by hand: each one is taken apart once, in a process of its ow
 
 Where it is supported, the extension samples the brightness of what is behind the UI and adjusts the text color so labels stay readable on both bright and dark wallpapers. A **Preferred text color** (Automatic / Light / Dark) decides the cases where the background favors neither. The sample interval is configurable; a shorter interval reacts faster but costs more CPU.
 
-### Quick Settings: Whole menu vs. Individual buttons
+### Quick Settings: custom grid and submenus
 
-- **Whole menu** applies the glass as one continuous sheet behind the whole quick settings panel. Corner radius, X/Y offset and the spring animation apply to that sheet.
-- **Individual buttons** gives each toggle button its own glass shape, tracked individually. "Button corners" sets the roundness of each shape, and "Button base color" controls how much of the toggle's own original color (for example the blue of an active toggle) is kept, independently of the custom tint color.
+The native quick settings grid is hidden and replaced with glass cards, one per quick setting, laid out from a saved JSON layout. Wide and single cards, sliders (volume, brightness, microphone) and toggles are all drawn as glass, and each card mirrors the state and activation of the native control behind it. Wi-Fi, Bluetooth, power mode and caffeine cards open a floating submenu — a separate glass panel listing networks, devices or actions with switches, spinners and status text — and the panel animates between the grid and the submenu. The menu's edit button opens a layout editor to reorder, resize or hide cards.
+
+Corner radius, X/Y offset, glass expand, tint and the open animation (including the starting **Open scale**) apply to this UI, and adaptive text coloring keeps labels readable over the glass.
 
 
 ### Using it with Blur my Shell
@@ -275,7 +268,7 @@ A significant part of this codebase was written with the help of AI coding assis
 - [x] Add Simple and Advanced preference views
 - [x] Add Adaptive Text Coloring
 - [x] Add Quick Settings support (Background mode)
-- [x] Add Quick Settings Toggle mode (per-toggle glass)
+- [x] Replace the native Quick Settings with a custom glass grid, floating submenus and a layout editor (ported from Liquid Glass v2)
 - [x] Add OSD support
 - [x] Add Application Window support (originally by [@hoshizora-chi](https://github.com/hoshizora-chi))
 - [x] Add window blacklist with a visual window picker

@@ -10,7 +10,7 @@ import {PanelMenuManager} from './dist/panelMenuManager.js';
 import {BlurMyShellWatch} from './dist/blurMyShell.js';
 import {DashManager} from './dist/dockManager.js';
 import {NotificationManager} from './dist/notificationManager.js';
-import {QuickSettingsManager} from './dist/quickSettingsManager.js';
+import {QuickSettingsManager} from './dist/quickSettings/manager.js';
 import {OsdManager} from './dist/osdManager.js';
 import {ApplicationManager} from './dist/applicationManager.js';
 import {WindowListService} from './dist/windowListService.js';

@@ -15,7 +15,15 @@ const _gobjectToString: (this: any) => string =
 export function isActorValid(actor: any): boolean {
   if (!actor) return false;
 
-  const desc = _gobjectToString.call(actor);
+  // Menu items, settings rows and similar plain JS objects reach this through
+  // the Quick Settings submenu scrapers; the GObject toString below throws on
+  // them, which must read as "not an actor" rather than abort the caller.
+  let desc: string;
+  try {
+    desc = _gobjectToString.call(actor);
+  } catch (e) {
+    return false;
+  }
   if (desc.includes('(DISPOSED)') || desc.includes('(FINALIZED)'))
     return false;
 

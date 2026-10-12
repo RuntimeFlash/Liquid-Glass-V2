@@ -44,7 +44,7 @@ export function buildPreferences(window, settings) {
   ], '', false);
   const glass = controls.group(appearance, 'Glass', 'One look for all effects. Existing differences stay until you change a control.');
   controls.number(glass, 'Blur', sharedKeys('blur-radius'), 0, 30, 1, '', {slider: true});
-  controls.number(glass, 'Corners', [...sharedKeys('corner-radius'), 'quick-settings-toggle-corner-radius'], 0, 200, 1, '', {slider: true});
+  controls.number(glass, 'Corners', [...sharedKeys('corner-radius')], 0, 200, 1, '', {slider: true});
   controls.color(glass, 'Tint', sharedKeys('tint-color'));
   controls.number(glass, 'Tint strength', sharedKeys('tint-strength'), 0, 1, 0.05, '', {slider: true});
 
@@ -82,11 +82,6 @@ export function buildPreferences(window, settings) {
   });
 
   const renderingTail = collectGroups(advanced, () => {
-    const compatibility = controls.group(advanced, 'Compatibility');
-    controls.choice(compatibility, 'Quick settings glass', [
-      {title: 'Whole menu', patch: {'quick-settings-apply-to': 0}},
-      {title: 'Individual buttons', patch: {'quick-settings-apply-to': 1}},
-    ]);
     const diagnostics = controls.group(advanced, 'Troubleshooting');
     controls.toggle(diagnostics, 'Logging', 'output-logs');
     controls.toggle(diagnostics, 'Render diagnostics', 'glass-debug-diagnostics', 'Adds rendering overhead; leave off for normal use.');

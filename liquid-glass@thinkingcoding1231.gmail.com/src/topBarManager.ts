@@ -1,5 +1,6 @@
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
+import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import St from 'gi://St';
 
@@ -42,6 +43,10 @@ export class TopBarManager {
   // The bar and its boxes, with the inline styles they had before ours.
   private _savedStyles: [St.Widget, string | null][] = [];
   private _panelStyleId = 0;
+  // Writing the bar's inline style re-emits style-changed; the handler must not
+  // run _applyLayout() from inside its own write, or the two can feed each other.
+  private _applyingLayout = false;
+  private _layoutIdleId = 0;
   private _margin: Insets = { top: 0, bottom: 0, left: 0, right: 0 };
   private _padding: Insets = { top: 0, bottom: 0, left: 0, right: 0 };
 
@@ -96,7 +101,7 @@ export class TopBarManager {
     this._lastKey = '';
     this._savedStyles = [panel, panel._leftBox, panel._centerBox, panel._rightBox].map(actor => [actor, actor.get_style()]);
     // The theme can change the bar's height under us.
-    this._panelStyleId = panel.connect('style-changed', () => this._applyLayout());
+    this._panelStyleId = panel.connect('style-changed', () => this._scheduleLayout());
     this._applyLayout();
 
     startSyncLoop(this._frameSignalSlot, this._frameSlot, {
@@ -131,7 +136,16 @@ export class TopBarManager {
   // The bar grows by the margin and padding so the buttons keep the theme's
   // height, and its boxes are padded to put the buttons inside the pills.
   private _applyLayout(): void {
-    if (!this._glass) return;
+    if (!this._glass || this._applyingLayout) return;
+    this._applyingLayout = true;
+    try {
+      this._writeLayout();
+    } finally {
+      this._applyingLayout = false;
+    }
+  }
+
+  private _writeLayout(): void {
     const panel = Main.panel as any;
     const margin = this._margin = this._insets('margin');
     const padding = this._padding = this._insets('padding');
@@ -154,6 +168,17 @@ export class TopBarManager {
       const own = original?.trim().replace(/;$/, '');
       actor.set_style(own ? `${own}; ${style}` : style);
     }
+  }
+
+  // Deferred so a style-changed emitted by our own write lands after the write,
+  // and coalesced so a burst of theme changes becomes one pass.
+  private _scheduleLayout(): void {
+    if (this._layoutIdleId) return;
+    this._layoutIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+      this._layoutIdleId = 0;
+      this._applyLayout();
+      return GLib.SOURCE_REMOVE;
+    });
   }
 
   private _syncText(): void {
@@ -252,6 +277,10 @@ export class TopBarManager {
     }
     if (this._panelStyleId) Main.panel.disconnect(this._panelStyleId);
     this._panelStyleId = 0;
+    if (this._layoutIdleId) {
+      GLib.Source.remove(this._layoutIdleId);
+      this._layoutIdleId = 0;
+    }
     for (const [actor, style] of this._savedStyles)
       if (isActorValid(actor)) actor.set_style(style);
     this._savedStyles = [];
