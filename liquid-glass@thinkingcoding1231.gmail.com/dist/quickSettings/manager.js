@@ -8,7 +8,7 @@ import Pango from 'gi://Pango';
 import { LiquidEffect } from './liquidEffect.js';
 import { BackdropBlurEffect } from './backdropBlur.js';
 import { StageContrastSampler, AdaptiveContrastConfig } from './qsContrastSampler.js';
-import { UnpickableClone, UnpickableActor, suppressGnomePopupAnimation, hasStyleClass, hexToRgb } from './qsUtils.js';
+import { UnpickableClone, UnpickableActor, suppressGnomePopupAnimation, hasStyleClass, hexToRgb, createBackdropClone, syncBackdropClone } from './qsUtils.js';
 import { CustomSubmenuRenderer } from './customSubmenu.js';
 import { CustomQuickSettingsRenderer } from './customQuickSettings.js';
 import { QuickSettingsStampAnimation } from './quickSettingsAnimation.js';
@@ -607,7 +607,7 @@ export class QuickSettingsManager {
                 let fboContainer = new UnpickableActor();
                 fboContainer.set_size(2, 2);
                 clipBox.add_child(fboContainer);
-                let bgClone = new UnpickableClone({ source: Main.layoutManager._backgroundGroup });
+                let bgClone = createBackdropClone();
                 fboContainer.add_child(bgClone);
                 let windowClonesContainer = new UnpickableActor();
                 fboContainer.add_child(windowClonesContainer);
@@ -1276,6 +1276,7 @@ export class QuickSettingsManager {
                 let fboContainer = backing._liquidGlassFboContainer;
                 let bgClone = backing._liquidGlassBgClone;
                 if (ENABLE_QS_CARD_SHADER && clipBox && fboContainer && bgClone) {
+                    syncBackdropClone(bgClone);
                     if (geometry.clipW !== unscaledW || geometry.clipH !== unscaledH) {
                         clipBox.set_size(unscaledW, unscaledH);
                         fboContainer.set_size(unscaledW, unscaledH);
@@ -2670,7 +2671,7 @@ export class QuickSettingsManager {
             qsHalfBox.set_pivot_point(0, 0);
             qsHalfBox.set_scale(1, 1);
             qsFboContainer.add_child(qsHalfBox);
-            let qsBgClone = new UnpickableClone({ source: Main.layoutManager._backgroundGroup });
+            let qsBgClone = createBackdropClone();
             qsHalfBox.add_child(qsBgClone);
             let qsWindowClonesContainer = new UnpickableActor();
             qsHalfBox.add_child(qsWindowClonesContainer);
@@ -3151,6 +3152,7 @@ export class QuickSettingsManager {
             let fboContainer = this._qsBlurFboContainer;
             let bgClone = this._qsBlurBgClone;
             if (clipBox && fboContainer && bgClone) {
+                syncBackdropClone(bgClone);
                 // Transitions on these actors are cleared once when the animation
                 // starts, not per frame: this runs on every tick while the menu fades,
                 // where there is never a running transition left to cancel.

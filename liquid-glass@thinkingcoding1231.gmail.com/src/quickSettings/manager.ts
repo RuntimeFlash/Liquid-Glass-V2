@@ -9,7 +9,8 @@ import { LiquidEffect } from './liquidEffect.js';
 import { BackdropBlurEffect } from './backdropBlur.js';
 import { StageContrastSampler, AdaptiveContrastConfig } from './qsContrastSampler.js';
 import Gio from 'gi://Gio';
-import { UnpickableClone, UnpickableActor, suppressGnomePopupAnimation, hasStyleClass, hexToRgb } from './qsUtils.js';
+import { UnpickableClone, UnpickableActor, suppressGnomePopupAnimation, hasStyleClass, hexToRgb,
+  createBackdropClone, syncBackdropClone } from './qsUtils.js';
 import { CustomSubmenuRenderer } from './customSubmenu.js';
 import { CustomQuickSettingsRenderer } from './customQuickSettings.js';
 import { QuickSettingsStampAnimation } from './quickSettingsAnimation.js';
@@ -251,7 +252,7 @@ export class QuickSettingsManager {
   // Counter-scale box inside _qsBlurFboContainer: everything below it is drawn
   // at 1/k so the whole menu-sized source fits the k-times-smaller blur buffer.
   private _qsBlurHalfBox: Clutter.Actor | null = null;
-  private _qsBlurBgClone: Clutter.Clone | null = null;
+  private _qsBlurBgClone: Clutter.Actor | null = null;
   private _qsBlurWindowClonesContainer: Clutter.Actor | null = null;
   private _qsBlurWindowClones: Map<Clutter.Actor, Clutter.Clone> = new Map();
   // Window-set token the overlay's clones were last built from. ClutterClone
@@ -686,7 +687,7 @@ export class QuickSettingsManager {
       fboContainer.set_size(2, 2);
       clipBox.add_child(fboContainer);
 
-      let bgClone = new UnpickableClone({ source: Main.layoutManager._backgroundGroup });
+      let bgClone = createBackdropClone();
       fboContainer.add_child(bgClone);
 
       let windowClonesContainer = new UnpickableActor();
@@ -1331,8 +1332,9 @@ export class QuickSettingsManager {
 
         let clipBox = (backing as any)._liquidGlassClipBox as St.Widget | undefined;
         let fboContainer = (backing as any)._liquidGlassFboContainer as Clutter.Actor | undefined;
-        let bgClone = (backing as any)._liquidGlassBgClone as Clutter.Clone | undefined;
+        let bgClone = (backing as any)._liquidGlassBgClone as Clutter.Actor | undefined;
         if (ENABLE_QS_CARD_SHADER && clipBox && fboContainer && bgClone) {
+          syncBackdropClone(bgClone);
           if (geometry.clipW !== unscaledW || geometry.clipH !== unscaledH) {
             clipBox.set_size(unscaledW, unscaledH);
             fboContainer.set_size(unscaledW, unscaledH);
@@ -2652,7 +2654,7 @@ export class QuickSettingsManager {
       qsHalfBox.set_scale(1, 1);
       qsFboContainer.add_child(qsHalfBox);
 
-      let qsBgClone = new UnpickableClone({ source: Main.layoutManager._backgroundGroup });
+      let qsBgClone = createBackdropClone();
       qsHalfBox.add_child(qsBgClone);
 
       let qsWindowClonesContainer = new UnpickableActor();
@@ -3165,6 +3167,7 @@ export class QuickSettingsManager {
       let fboContainer = this._qsBlurFboContainer;
       let bgClone = this._qsBlurBgClone;
       if (clipBox && fboContainer && bgClone) {
+        syncBackdropClone(bgClone);
         // Transitions on these actors are cleared once when the animation
         // starts, not per frame: this runs on every tick while the menu fades,
         // where there is never a running transition left to cancel.

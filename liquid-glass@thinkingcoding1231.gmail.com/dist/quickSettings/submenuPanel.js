@@ -25,7 +25,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { LiquidEffect } from './liquidEffect.js';
-import { UnpickableActor, UnpickableClone } from './qsUtils.js';
+import { UnpickableActor, UnpickableClone, createBackdropClone, syncBackdropClone } from './qsUtils.js';
 import { SubmenuAnimation } from './submenuAnimation.js';
 /** Transparent padding outside the glass, so the shader is never clipped. */
 export const SHADER_PADDING = 20;
@@ -231,7 +231,7 @@ export class SubmenuPanel {
         this._halfBox = new UnpickableActor();
         this._halfBox.set_pivot_point(0, 0);
         this._fboContainer.add_child(this._halfBox);
-        this._bgClone = new UnpickableClone({ source: Main.layoutManager._backgroundGroup });
+        this._bgClone = createBackdropClone();
         this._halfBox.add_child(this._bgClone);
         this._windowClonesContainer = new UnpickableActor();
         this._halfBox.add_child(this._windowClonesContainer);
@@ -376,6 +376,7 @@ export class SubmenuPanel {
         try {
             const glassX = this._x - SHADER_PADDING;
             const glassY = this._y - SHADER_PADDING;
+            syncBackdropClone(this._bgClone);
             this._bgClone.set_position(-glassX, -glassY);
             if (!this._bgClone.visible)
                 this._bgClone.show();

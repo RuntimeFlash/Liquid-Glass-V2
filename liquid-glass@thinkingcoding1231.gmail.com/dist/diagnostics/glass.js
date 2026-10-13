@@ -336,3 +336,11 @@ export function registerGlass(glass) {
 export function unregisterGlass(glass) {
     _liveGlasses.delete(glass);
 }
+
+// Names this extension gives its own actors: the glass actors, the sample
+// areas the relays live in, and the desktop layer the widgets sit in. Code
+// that walks the shell's actor tree (backdrop clones, relays) uses this to
+// tell our machinery apart from the shell's own.
+export function isOwnActor(actor) {
+    return (actor.get_name() ?? '').startsWith('liquid-glass');
+}

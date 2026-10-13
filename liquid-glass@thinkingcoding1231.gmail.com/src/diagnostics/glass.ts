@@ -1,4 +1,5 @@
 import GLib from 'gi://GLib';
+import Clutter from 'gi://Clutter';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { setFrameSyncFrozen, isFrameSyncFrozen } from '../animation/frameSync.js';
 import { setDiffWritesEnabled, isDiffWritesEnabled } from '../actors/writes.js';
@@ -338,4 +339,12 @@ export function registerGlass(glass: any): void {
 
 export function unregisterGlass(glass: any): void {
   _liveGlasses.delete(glass);
+}
+
+// Names this extension gives its own actors: the glass actors, the sample
+// areas the relays live in, and the desktop layer the widgets sit in. Code
+// that walks the shell's actor tree (backdrop clones, relays) uses this to
+// tell our machinery apart from the shell's own.
+export function isOwnActor(actor: Clutter.Actor): boolean {
+  return (actor.get_name() ?? '').startsWith('liquid-glass');
 }

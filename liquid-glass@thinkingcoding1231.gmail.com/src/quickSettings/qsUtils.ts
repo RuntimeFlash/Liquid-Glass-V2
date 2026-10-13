@@ -1,6 +1,9 @@
 // utils.ts
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+
+import { isOwnActor } from '../diagnostics/glass.js';
 
 /**
  * A Clutter.Clone the Looking Glass picker passes through.
@@ -28,6 +31,56 @@ export const UnpickableActor = GObject.registerClass(
     }
   }
 );
+
+// The shell's background group holds the wallpaper and, while the desktop
+// widgets are on, Liquid Glass's own desktop layer. Cloning the group as a
+// whole re-renders every widget's glass inside the clone, and the Quick
+// Settings paints one clone per card and panel, so the widget glasses end up
+// composited a dozen times a frame. Leave Liquid Glass's own actors out (see
+// isOwnActor).
+function rebuildBackdropClone(box: Clutter.Actor): void {
+  for (const child of [...box.get_children()] as Clutter.Actor[]) child.destroy();
+  const group: any = (Main.layoutManager as any)._backgroundGroup;
+  if (!group) return;
+  const children = group.get_children() as Clutter.Actor[];
+  if (!children.some(isOwnActor)) {
+    // Nothing of ours in the group, so one clone of it keeps the shell's own
+    // arrangement (monitor offsets, wallpaper switches) exactly.
+    box.add_child(new UnpickableClone({ source: group }));
+    return;
+  }
+  for (const source of children) {
+    if (isOwnActor(source)) continue;
+    const clone = new UnpickableClone({ source }) as Clutter.Clone;
+    const [x, y] = source.get_position();
+    clone.set_position(x, y);
+    box.add_child(clone);
+  }
+}
+
+/** A box of wallpaper clones to use as a glass backdrop; see above. */
+export function createBackdropClone(): Clutter.Actor {
+  const box = new UnpickableActor();
+  const group: any = (Main.layoutManager as any)._backgroundGroup;
+  if (group) {
+    const invalidate = () => { (box as any)._liquidGlassRebuild = true; };
+    const added = group.connect('child-added', invalidate);
+    const removed = group.connect('child-removed', invalidate);
+    box.connect('destroy', () => {
+      group.disconnect(added);
+      group.disconnect(removed);
+    });
+  }
+  rebuildBackdropClone(box);
+  return box;
+}
+
+/** Rebuilds the box's clones when the background group's children changed. */
+export function syncBackdropClone(box: Clutter.Actor): void {
+  if (!(box as any)._liquidGlassRebuild) return;
+  (box as any)._liquidGlassRebuild = false;
+  rebuildBackdropClone(box);
+}
 
 export interface PopupAnimationHooks {
   /** True only when the extension's custom fade will actually run this time. */
