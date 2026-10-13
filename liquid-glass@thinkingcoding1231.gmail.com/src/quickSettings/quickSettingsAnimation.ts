@@ -54,6 +54,16 @@ const MAX_FRAME_MS = 50;
 /** Closing decay rate (1/s), matching the clock menu's exponential fade-out. */
 const CLOSE_DECAY_SPEED = 15.0;
 
+/**
+ * The stamp presses down with an ease-out on the way open, and the close leaves
+ * with an ease-in. The curves shape the springs' timing rather than replace it,
+ * so stiffness, damping and mass keep meaning what they did. Quadratic, not
+ * cubic: the springs are already quick off the mark, and a cubic on top of that
+ * spent most of the motion in its first handful of frames.
+ */
+export const easeOutQuad = (t: number) => 1 - (1 - t) ** 2;
+export const easeInQuad = (t: number) => t * t;
+
 /** The stamp never shrinks past this, so the shader always has a real size. */
 const MIN_OPEN_SCALE = 0.9;
 
@@ -156,6 +166,9 @@ export class QuickSettingsStampAnimation {
   private _finished = false;
   private _accumulatorMs = 0;
   private _lastTickUs = 0;
+  // The opacity the current close started from, so its ease-in can be shaped
+  // against it even when the close interrupted an open.
+  private _closeFrom = 1;
 
   constructor(host: StampAnimationHost, options: StampAnimationOptions) {
     this._host = host;
@@ -238,6 +251,7 @@ export class QuickSettingsStampAnimation {
       this._scale.velocity = 0;
       this._scale.target = 1;
       this._opacity.value = this._currentOpacity();
+      this._closeFrom = Math.max(CLOSE_SETTLE_ALPHA, this._opacity.value);
       this._opacity.velocity = 0;
       this._opacity.target = 0;
     }
@@ -396,11 +410,16 @@ export class QuickSettingsStampAnimation {
       // NOTE: the scale spring deliberately runs above 1.0 -- it starts at
       // openScale and settles down. Clamping it to [0, 1] here would pin the
       // whole stamp at 1.0 and the menu would simply appear at full size.
-      scale = Math.max(MIN_OPEN_SCALE, finiteOr(this._scale.value, this._openScale));
-      opacity = Math.round(clamp01(this._opacity.value) * 255);
+      const span = 1 - this._openScale;
+      const spring = finiteOr(this._scale.value, this._openScale);
+      const progress = Math.abs(span) > 0.0001 ? clamp01((spring - this._openScale) / span) : 1;
+      scale = Math.max(MIN_OPEN_SCALE, this._openScale + span * easeOutQuad(progress));
+      opacity = Math.round(easeOutQuad(clamp01(this._opacity.value)) * 255);
     } else {
       scale = 1;
-      opacity = Math.round(clamp01(this._opacity.value) * 255);
+      const from = Math.max(CLOSE_SETTLE_ALPHA, this._closeFrom);
+      const progress = clamp01(1 - finiteOr(this._opacity.value, 0) / from);
+      opacity = Math.round(clamp01(from * (1 - easeInQuad(progress))) * 255);
     }
 
     if (this._finished) {
