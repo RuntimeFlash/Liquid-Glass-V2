@@ -193,6 +193,25 @@ export class RelaySet {
     wanted: Map<Clutter.Actor, SourceReach>): void {
     for (let a = group.get_first_child(); a; a = a.get_next_sibling()) {
       if (!a.mapped || a.opacity === 0) continue;
+      if (a instanceof Meta.WindowActor)
+        wanted.set(a, sourceReach(a, near, keep));
+      else
+        this._collectContainerChildren(a, near, keep, wanted);
+    }
+  }
+
+  // A non-window child of the window group is a container spanning the whole
+  // monitor (the shell's background group, which also holds this extension's
+  // desktop layer). Relaying it as one source damages the whole sample area
+  // whenever anything inside it redraws, so a widget redrawing would make
+  // every glass on screen copy its backdrop again. Relay its children instead
+  // -- they are what can change separately, and the spatial test still drops
+  // the ones that cannot reach the sample area. Only this one level is
+  // substituted: a child that draws the backdrop itself must stay a source.
+  private _collectContainerChildren(container: Clutter.Actor, near: number[], keep: number[],
+    wanted: Map<Clutter.Actor, SourceReach>): void {
+    for (let a = container.get_first_child(); a; a = a.get_next_sibling()) {
+      if (!a.mapped || a.opacity === 0) continue;
       wanted.set(a, sourceReach(a, near, keep));
     }
   }
