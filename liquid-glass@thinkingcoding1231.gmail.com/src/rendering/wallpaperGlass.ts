@@ -103,7 +103,13 @@ export const WallpaperGlass = GObject.registerClass(paintNodeWithContext(
       const s = this._sampleShaderRect();
       if (!scale || !s) return;
       const [kx, ky] = scale;
+      // The glass may not be allocated yet, and its stage position is NaN then
+      // (get_transformed_position documents this); a rectangle built from it
+      // makes Clutter reject the region and the capture comes out empty.
       const [gx, gy] = this.get_transformed_position();
+      if (!Number.isFinite(gx) || !Number.isFinite(gy) || !this.has_allocation()) return;
+      const [px, py] = this.get_position();
+      if (!Number.isFinite(px) || !Number.isFinite(py)) return;
       const rect = [
         gx + Math.round(s[0] * kx), gy + Math.round(s[1] * ky),
         Math.max(1, Math.round(s[2] * kx)), Math.max(1, Math.round(s[3] * ky)),
@@ -117,7 +123,6 @@ export const WallpaperGlass = GObject.registerClass(paintNodeWithContext(
       if (!this._same(this._lastRect, rect)) {
         this._lastRect = rect;
         this._rect = rect;
-        const [px, py] = this.get_position();
         this._captureActor.set_position(px + Math.round(s[0] * kx), py + Math.round(s[1] * ky));
         this._captureActor.set_size(rect[2], rect[3]);
         this._wallpaperChanged();
