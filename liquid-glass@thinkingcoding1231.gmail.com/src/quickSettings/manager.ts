@@ -148,6 +148,8 @@ export class QuickSettingsManager {
   private _cardBackings: Map<Clutter.Actor, St.Widget>;
   private _cardBackingSyncId: number;
   private _cardBackingLastSignature: string;
+  // The window set the card clones were last rebuilt for; see _syncCardBackings.
+  private _cardCloneSig: string;
   private _cardBackingStableFrames: number;
   private _cardBackingIdleMode: boolean;
   private _hiddenMenuParts: Map<any, {
@@ -352,6 +354,7 @@ export class QuickSettingsManager {
     this._cardBackings = new Map();
     this._cardBackingSyncId = 0;
     this._cardBackingLastSignature = '';
+    this._cardCloneSig = '';
     this._cardBackingStableFrames = 0;
     this._cardBackingIdleMode = false;
     this._hiddenMenuParts = new Map();
@@ -1134,10 +1137,19 @@ export class QuickSettingsManager {
   // tick-throttled case: children are left in place and only the container is
   // moved. `frameWindowActors` lets the animation tick reuse one snapshot of
   // global.get_window_actors() instead of re-fetching it per sync.
-  _syncCardBackings(skipWindowClones = false, rebuildWindowClones = !skipWindowClones, frameWindowActors: any[] | null = null) {
+  _syncCardBackings(skipWindowClones = false, rebuildWindowClones = !skipWindowClones, frameWindowActors: any[] | null = null,
+    forceCloneRebuild = false) {
     if (!this.menu?.actor?.mapped && !this._isAnimating) return;
 
     let windowActors = frameWindowActors ?? global.get_window_actors();
+    // A rebuild walks every window for every card and rewrites the clones'
+    // geometry, which forces a relayout for each one; the opening frames woke
+    // this dozens of times over (allocation bursts, clip sweeps, setting
+    // changes), and that burst was most of the open's CPU. The window-set
+    // token says whether a rebuild could change anything at all.
+    const windowSig = this._backdropWindowSignature();
+    const windowSetChanged = forceCloneRebuild || windowSig !== this._cardCloneSig;
+    if (windowSetChanged) this._cardCloneSig = windowSig;
     let parent = this.menu?.actor?.get_parent?.() || Main.layoutManager.uiGroup;
     // Recomputed once per sync. Acting as the tick's frame token, it also
     // thins the style-class work below to real animation frames.
@@ -1370,7 +1382,7 @@ export class QuickSettingsManager {
             sourceStageX,
             sourceStageY,
             windowActors,
-            (!skipWindowClones && rebuildWindowClones) || backingNeedsBuild,
+            (rebuildWindowClones && !skipWindowClones && windowSetChanged) || backingNeedsBuild,
             projectionIsIdentity ? rect : null,
           );
         }
@@ -1650,7 +1662,7 @@ export class QuickSettingsManager {
       return GLib.SOURCE_CONTINUE;
     };
 
-    this._syncCardBackings();
+    this._syncCardBackings(false, true, null, true);
     // Same reason as the tick above: the backdrop has to be showing the real
     // windows on the frame the menu appears, before the first 16ms tick runs.
     // Move-only, so this costs nothing unless the window set actually changed.
@@ -3781,7 +3793,7 @@ export class QuickSettingsManager {
       rebuildClones = true;
     }
 
-    try { this._syncCardBackings(false, rebuildClones, null); } catch (e) {}
+    try { this._syncCardBackings(false, rebuildClones, null, rebuildClones); } catch (e) {}
   }
 
   /**
@@ -3817,7 +3829,7 @@ export class QuickSettingsManager {
         this.animActor.opacity = 255;
         this._applyMenuOffsets();
         this._syncGeometry();
-        this._syncCardBackings(false, true);
+        this._syncCardBackings(false, true, null, true);
         // The overlay is on screen for the whole transition now, so land its
         // clone set and geometry exactly on the settled rect. Forced rather than
         // token-driven: this is the one point in the open where a full, settled
@@ -4129,7 +4141,7 @@ export class QuickSettingsManager {
     // geometry is live and settled). The idle timer stays stopped through the
     // entrance — the ease drives move-only syncs and finishReturn restarts it.
     try { this._stopCardBackingSync(); } catch (e) {}
-    try { this._syncCardBackings(false, true); } catch (e) {}
+    try { this._syncCardBackings(false, true, null, true); } catch (e) {}
     // ...and the overlay geometry is final before it fades in (QS itself does
     // not move during the entrance, so no per-frame overlay sync is needed).
     if (this._qsBlurOverlay) {
