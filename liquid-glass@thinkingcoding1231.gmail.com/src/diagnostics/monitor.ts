@@ -1,7 +1,8 @@
 // A once-a-second journal line comparing the glass's work with the GPU's and
 // the shell's in a real session: global._lgGlass.monitor(). It has amdgpu's
-// busy percentage, shader clock and power (busy alone depends on the clock the
-// driver picked; an APU's power includes the CPU), the shell's CPU time, the
+// busy percentage and Intel's GT frequency, hwmon's shader clock and power
+// (busy alone depends on the clock the driver picked; an APU's power includes
+// the CPU), the shell's CPU time, the
 // frames painted and how many redrew a whole monitor, a scene worked out from
 // what is on screen, and each glass's copies and paints. A benchmark can label
 // the lines. tools/perf/glass-monitor.sh averages them per scene or label.
@@ -483,15 +484,19 @@ function listDir(path: string): string[] {
   return names;
 }
 
-// amdgpu's busy percentage, and its hwmon shader clock and power, per card.
+// amdgpu's busy percentage, Intel's GT frequency, and hwmon's shader clock and
+// power, per card.
 function findGpuSensors(): GpuSensors {
   const sensors: GpuSensors = { busy: [], clock: [], power: [] };
   const exists = (file: string) => GLib.file_test(file, GLib.FileTest.EXISTS);
   for (const card of listDir('/sys/class/drm')) {
     if (!/^card\d+$/.test(card)) continue;
     const device = `/sys/class/drm/${card}/device`;
-    if (!exists(`${device}/gpu_busy_percent`)) continue;
-    sensors.busy.push(`${device}/gpu_busy_percent`);
+    const busy = `${device}/gpu_busy_percent`;
+    if (exists(busy)) sensors.busy.push(busy);
+    // i915 exports no busy percentage but reports the current GT frequency.
+    const gt = `/sys/class/drm/${card}/gt_act_freq_mhz`;
+    if (exists(gt)) sensors.clock.push(gt);
     for (const hwmon of listDir(`${device}/hwmon`)) {
       const base = `${device}/hwmon/${hwmon}`;
       if (exists(`${base}/freq1_input`)) sensors.clock.push(`${base}/freq1_input`);

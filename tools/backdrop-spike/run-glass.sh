@@ -19,7 +19,10 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-lg_uuid=liquid-glass@thinkingcoding1231.gmail.com
+# The checkout's directory name is historical; the uuid the shell loads is the
+# one metadata.json declares.
+ext_dir=liquid-glass@thinkingcoding1231.gmail.com
+lg_uuid=$(node -p "require('$repo/$ext_dir/metadata.json').uuid")
 dtd_uuid=dash-to-dock@micxgx.gmail.com
 drv_uuid=lg-driver@liquid-glass.test
 dtd_src=${LG_DTD_DIR:-$HOME/.local/share/gnome-shell/extensions/$dtd_uuid}
@@ -31,7 +34,7 @@ mkdir -p "$out"/{config,cache,shots} "$ext"
 rm -rf "${ext:?}"/*
 mkdir -p "$ext/$lg_uuid"
 for f in metadata.json extension.js stylesheet.css dist shaders schemas fonts; do
-  cp -r "$repo/$lg_uuid/$f" "$ext/$lg_uuid/"
+  cp -r "$repo/$ext_dir/$f" "$ext/$lg_uuid/"
 done
 cp -r "$dtd_src" "$ext/$dtd_uuid"
 cp -r "$here/$drv_uuid" "$ext/"
@@ -94,6 +97,10 @@ dbus-run-session -- bash -c "
   gsettings set org.gnome.shell enabled-extensions \"['$drv_uuid', '$dtd_uuid', '$lg_uuid'$extra]\"
   gsettings set org.gnome.shell disable-user-extensions false
   gsettings set org.gnome.shell welcome-dialog-last-shown-version '9999'
+  # The desktop widgets and the glass clock ship off; the scenarios that cover
+  # them need them on.
+  gsettings --schemadir '$ext/$lg_uuid/schemas' set org.gnome.shell.extensions.$lg_uuid enable-glass-clock true
+  gsettings --schemadir '$ext/$lg_uuid/schemas' set org.gnome.shell.extensions.$lg_uuid enable-desktop-widgets true
   gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock dock-fixed true
   gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock intellihide false
   gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock dock-position 'BOTTOM'$dtd_extra

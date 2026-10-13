@@ -31,11 +31,14 @@ case "$version" in
 esac
 
 BOX=gnome$version
-UUID=liquid-glass@thinkingcoding1231.gmail.com
+# The checkout's directory name is historical; the packed extension is named
+# after the uuid metadata.json declares.
+ext_dir=liquid-glass@thinkingcoding1231.gmail.com
 DTD_UUID=dash-to-dock@micxgx.gmail.com
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-ext_src="$repo/$UUID"
+UUID=$(node -p "require('$repo/$ext_dir/metadata.json').uuid")
+ext_src="$repo/$ext_dir"
 zip="$ext_src/$UUID.shell-extension.zip"
 
 in_box() { [ -n "${CONTAINER_ID:-}" ] || [ -f /run/.containerenv ]; }

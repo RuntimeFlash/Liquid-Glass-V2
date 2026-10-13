@@ -30,7 +30,16 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const LG_UUID = 'liquid-glass@thinkingcoding1231.gmail.com';
+// The checkout's directory name is historical; the shell loads the uuid
+// metadata.json declares, so look the enabled extension up by name.
+let LG_UUID = 'liquid-glass@thinkingcoding1231.gmail.com';
+function resolveLgUuid() {
+    for (const extension of Main.extensionManager.extensions ?? []) {
+        if (extension.metadata?.name === 'Liquid Glass')
+            return extension.uuid;
+    }
+    return LG_UUID;
+}
 const MEDIA_DIR = GLib.build_filenamev([GLib.get_user_cache_dir(), 'lg-bench']);
 const VIDEO = GLib.build_filenamev([MEDIA_DIR, 'video.mp4']);
 const STILL = GLib.build_filenamev([MEDIA_DIR, 'still.png']);
@@ -44,9 +53,6 @@ const AWAY_GAP = 300;
 const GLASS_KEYS = ['enable-dock-glass', 'enable-menu-glass', 'enable-quick-settings-glass',
     'enable-notification-glass', 'enable-osd-glass'];
 const APP_GLASS_KEY = 'enable-application-glass';
-const QS_MODE_KEY = 'quick-settings-apply-to';
-const QS_BACKGROUND = 0;
-const QS_TOGGLES = 1;
 
 const SCENARIOS = [
     {id: 'B1', title: '静止（窓 2 枚）'},
@@ -57,10 +63,8 @@ const SCENARIOS = [
     {id: 'B6', title: 'カレンダーを開いたまま', setup: b => b.open(b.calendar)},
     {id: 'B7', title: 'カレンダーの開閉（1 秒ごと）', measure: b => b.cycleMenu(b.calendar)},
     {id: 'B8', title: '動画の上でカレンダーを開いたまま', video: 'calendar', setup: b => b.open(b.calendar)},
-    {id: 'B9a', title: 'クイック設定・背景モードを開いたまま', qsMode: QS_BACKGROUND, setup: b => b.open(b.quickSettings)},
-    {id: 'B9b', title: 'クイック設定・背景モードの開閉（1 秒ごと）', qsMode: QS_BACKGROUND, measure: b => b.cycleMenu(b.quickSettings)},
-    {id: 'B10a', title: 'クイック設定・トグルモードを開いたまま', qsMode: QS_TOGGLES, setup: b => b.open(b.quickSettings)},
-    {id: 'B10b', title: 'クイック設定・トグルモードの開閉（1 秒ごと）', qsMode: QS_TOGGLES, measure: b => b.cycleMenu(b.quickSettings)},
+    {id: 'B9a', title: 'クイック設定を開いたまま', setup: b => b.open(b.quickSettings)},
+    {id: 'B9b', title: 'クイック設定の開閉（1 秒ごと）', measure: b => b.cycleMenu(b.quickSettings)},
     {id: 'B11', title: 'オーバービューの開閉（1.5 秒ごと）', measure: b => b.cycleOverview()},
     {id: 'B12', title: 'ワークスペースの切り替え（1.5 秒ごと）', measure: b => b.cycleWorkspace()},
     {id: 'B13', title: '通知バナー（4 秒表示・1 秒消す、の繰り返し）', measure: b => b.notifications()},
@@ -204,7 +208,7 @@ class Bench {
         const session = new Gio.Settings({schema_id: 'org.gnome.desktop.session'});
         const notifications = new Gio.Settings({schema_id: 'org.gnome.desktop.notifications'});
         const saved = [];
-        for (const key of [...GLASS_KEYS, APP_GLASS_KEY, QS_MODE_KEY])
+        for (const key of [...GLASS_KEYS, APP_GLASS_KEY])
             saved.push([lgSettings, key, lgSettings.get_value(key)]);
         saved.push([session, 'idle-delay', session.get_value('idle-delay')]);
         saved.push([notifications, 'show-banners', notifications.get_value('show-banners')]);
@@ -314,10 +318,6 @@ class Bench {
         Main.osdWindowManager.hideAll();
         this._dropNotifications();
         await this._toWorkspace(0);
-        if (sc.qsMode !== undefined && this._lgSettings.get_int(QS_MODE_KEY) !== sc.qsMode) {
-            this._lgSettings.set_int(QS_MODE_KEY, sc.qsMode);
-            await this._sleep(1500);
-        }
         this._parkPointer();
         await this._spawnStills();
     }
@@ -671,6 +671,7 @@ class Bench {
 
 export default class LgBench extends Extension {
     enable() {
+        LG_UUID = resolveLgUuid();
         this._bench = new Bench();
         global._lgBench = this._bench;
     }

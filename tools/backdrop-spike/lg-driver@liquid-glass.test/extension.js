@@ -48,7 +48,17 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const OUT_DIR = GLib.getenv('LG_SPIKE_OUT') ?? GLib.get_tmp_dir();
 const SCENARIO = GLib.getenv('LG_DRV_SCENARIO') ?? 'dock';
-const LG_UUID = 'liquid-glass@thinkingcoding1231.gmail.com';
+const LG_UUID_DEFAULT = 'liquid-glass@thinkingcoding1231.gmail.com';
+// The fork ships the extension under its metadata uuid, which need not match
+// the directory this checkout lives in; find the enabled Liquid Glass instead.
+let LG_UUID = LG_UUID_DEFAULT;
+function resolveLgUuid() {
+  for (const extension of Main.extensionManager.extensions ?? []) {
+    if (extension.metadata?.name === 'Liquid Glass')
+      return extension.uuid;
+  }
+  return LG_UUID_DEFAULT;
+}
 const ARCMENU_UUID = 'arcmenu@arcmenu.com';
 const COLORS = ['rgb(255,0,255)', 'rgb(255,255,0)'];
 
@@ -221,6 +231,7 @@ function delta(a, b) {
 
 export default class LgDriver extends Extension {
   enable() {
+    LG_UUID = resolveLgUuid();
     this._actors = [];
     this._procs = [];
     this._signals = [];
@@ -274,7 +285,10 @@ export default class LgDriver extends Extension {
     }
     this._camera = this._add(new Camera([0, 0, 10, 10]));
     this._camera.set_position(20, 60);
-    for (let i = 0; i < 40 && !this._glass('dock'); i++)
+    // Wait for the dock glass to exist *and* to have geometry: it is created a
+    // frame or two before its first paint, and a scenario that starts in
+    // between bails as if there were no glass at all.
+    for (let i = 0; i < 60 && !(this._glass('dock') && this._region('dock')); i++)
       await sleep(250);
 
     if (SCENARIO === 'dock')
@@ -612,7 +626,6 @@ export default class LgDriver extends Extension {
 
   async _togglesScenario() {
     const settings = this._lgSettings();
-    settings.set_int('quick-settings-apply-to', 1);
     await sleep(1500);
     const qs = Main.panel.statusArea.quickSettings.menu;
     qs.open(true);
@@ -1181,7 +1194,6 @@ export default class LgDriver extends Extension {
 
   async _lifecycleScenario() {
     const settings = this._lgSettings();
-    settings.set_int('quick-settings-apply-to', 1);
     await sleep(1500);
     const qs = Main.panel.statusArea.quickSettings.menu;
     const dateMenu = Main.panel.statusArea.dateMenu.menu;

@@ -158,6 +158,14 @@ on_exit() {
   echo
   summarize "$out"
   echo
+  # 監視行の cpu= は 1 コアに対する割合。全コアで見た負荷も出しておく。
+  local n
+  n=$(getconf _NPROCESSORS_ONLN)
+  awk -v n="$n" '
+    /\[monitor\] t=/ { if (match($0, /cpu=[0-9]+%/)) { c += substr($0, RSTART + 4, RLENGTH - 5); k++ } }
+    END { if (k) printf "gnome-shell 平均 %.1f%%/core = %.1f%%/%d コア（他プロセスを含めた全体は監視行の前後で見る）\n", c/k, c/k/n, n }
+  ' "$out"
+  echo
   echo "記録: $out（集計し直すには $0 --summary $out）"
   exit 0
 }
