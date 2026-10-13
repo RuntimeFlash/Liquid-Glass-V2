@@ -79,6 +79,19 @@ test('interval settings up to one 60Hz frame mean every frame, larger ones are a
   assert.equal(ticker.normalizeAnimationIntervalMs(1000), 50);
 });
 
+test('the step budget covers the interval a frame is allowed to skip', () => {
+  const { ticker } = fixture();
+  const step = 1000 / 120, maxFrame = 50, floor = 3;
+  const budget = interval => ticker.frameStepBudget(interval, step, maxFrame, floor);
+  // Every frame keeps the three steps it always had; a capped rate needs the
+  // steps for its interval plus a frame of slack, and a stalled frame is still
+  // bounded by maxFrameMs.
+  assert.equal(budget(0), floor);
+  assert.equal(budget(33), 7);
+  assert.equal(budget(50), 7);
+  assert.equal(budget(500), 7);
+});
+
 test('a second stage view updating in the same frame does not step the animation again', () => {
   const { ticker, frame } = fixture();
   let calls = 0;

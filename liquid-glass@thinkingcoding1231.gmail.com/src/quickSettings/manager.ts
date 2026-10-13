@@ -471,6 +471,8 @@ export class QuickSettingsManager {
 
     connectSetting('quick-settings-animation-interval-ms', () => {
       this._animationInterval = this._settings.get_int('quick-settings-animation-interval-ms');
+      // Caps the open/close animation's frame rate; a running one picks it up.
+      this._anim?.setIntervalMs(this._animationInterval);
     });
 
     connectSetting('quick-settings-open-scale', () => {
@@ -3684,6 +3686,7 @@ export class QuickSettingsManager {
       pivotX: 0.5,
       pivotY: 0.0,
     });
+    this._anim.setIntervalMs(this._animationInterval);
   }
 
   /**

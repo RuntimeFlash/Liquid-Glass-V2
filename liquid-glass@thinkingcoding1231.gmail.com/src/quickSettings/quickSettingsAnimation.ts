@@ -36,6 +36,8 @@ import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 
+import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs, frameStepBudget } from '../animation/frameTicker.js';
+
 /** Fixed simulation step. Two steps make up a 60 Hz frame. */
 const STEP_MS = 1000 / 120;
 
@@ -147,6 +149,8 @@ export class QuickSettingsStampAnimation {
   private _pivotY: number;
 
   private _tickId = 0;
+  // The frame interval the animation was asked for, already normalized.
+  private _intervalMs = 0;
   private _running = false;
   private _opening = true;
   private _finished = false;
@@ -175,6 +179,18 @@ export class QuickSettingsStampAnimation {
 
   setOpenScale(openScale: number): void {
     this._openScale = Math.max(1.0, openScale);
+  }
+
+  /**
+   * Caps how often the animation is stepped, in the same units as the menus'
+   * animation-interval setting. A running animation picks the new rate up at
+   * once, so the preference applies without a restart.
+   */
+  setIntervalMs(intervalMs: number): void {
+    const normalized = normalizeAnimationIntervalMs(intervalMs);
+    if (normalized === this._intervalMs) return;
+    this._intervalMs = normalized;
+    if (this._running) this._armTick();
   }
 
   /**
@@ -282,30 +298,22 @@ export class QuickSettingsStampAnimation {
   // ---- frame loop -------------------------------------------------------
 
   private _armTick(): void {
-    const laters = (global as any).compositor?.get_laters?.();
-    if (laters) {
-      this._tickId = laters.add(Meta.LaterType.BEFORE_REDRAW, () => {
-        this._onTick();
-        return GLib.SOURCE_REMOVE;
-      });
-      return;
-    }
-    // Fallback for shells without a compositor later list.
-    this._tickId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 8, () => {
+    this._cancelTick();
+    // The shared frame ticker keeps the frame clock running while the
+    // animation lives and steps it at most once per frame, skipping the frames
+    // the interval says it may: writing the popup less often is what keeps the
+    // glass under it from re-rendering on every frame of a slow CPU.
+    this._tickId = addFrameTicker(() => {
       this._onTick();
-      return GLib.SOURCE_REMOVE;
-    });
+      return this._running;
+    }, this._intervalMs);
   }
 
   private _cancelTick(): void {
     if (this._tickId === 0) return;
     const id = this._tickId;
     this._tickId = 0;
-    try {
-      const laters = (global as any).compositor?.get_laters?.();
-      if (laters) laters.remove(id);
-      else GLib.source_remove(id);
-    } catch (e) {}
+    removeFrameTicker(id);
   }
 
   private _onTick(): void {
@@ -321,8 +329,9 @@ export class QuickSettingsStampAnimation {
     // pay for is dropped: repaying it is what used to make a stalled frame jump
     // straight to the end of the spring.
     this._accumulatorMs += elapsedMs;
+    const maxSteps = frameStepBudget(this._intervalMs, STEP_MS, MAX_FRAME_MS, MAX_STEPS_PER_FRAME);
     let steps = 0;
-    while (this._accumulatorMs >= STEP_MS && steps < MAX_STEPS_PER_FRAME) {
+    while (this._accumulatorMs >= STEP_MS && steps < maxSteps) {
       this._step(STEP_MS);
       this._accumulatorMs -= STEP_MS;
       steps++;
@@ -330,9 +339,6 @@ export class QuickSettingsStampAnimation {
     if (this._accumulatorMs > STEP_MS) this._accumulatorMs = 0;
 
     this._applyFrame();
-    if (!this._running) return;
-
-    this._armTick();
   }
 
   /** Advances the springs by one fixed step and decides whether we are done. */
