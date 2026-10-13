@@ -1,6 +1,6 @@
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
-import { BackdropGlass } from '../rendering/backdropGlass.js';
+import { WallpaperGlass } from '../rendering/wallpaperGlass.js';
 import { ensureGlassAllocated } from '../actors/allocation.js';
 import { isActorValid } from '../actors/lifecycle.js';
 import { hexToColorArray } from '../animation/colors.js';
@@ -70,13 +70,14 @@ export class GlassCard {
         this.id = id;
         this.env = env;
         this.actor = new St.Widget({ name: `liquid-glass-desktop-${id}`, reactive: true, track_hover: true });
-        this.glass = new BackdropGlass({
+        this.glass = new WallpaperGlass({
             extensionPath: env.path, settings: env.settings, logger: env.logger, owner: `desktop-${id}`,
         });
         this.glass.setPadding(SHADER_PADDING);
         this.glass.setIsDock(false);
         this.glass.setShadowMaxRadius(SHADOW_MARGIN - 8);
         this.actor.add_child(this.glass);
+        this.actor.add_child(this.glass.sourceActor);
         this.box = new St.BoxLayout({ style_class: 'liquid-glass-desktop-card', width, ...verticalBoxParams() });
         this.actor.add_child(this.box);
         connectClicks(this.actor, () => this.activate(), (x, y) => env.menu(this, x, y));

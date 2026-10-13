@@ -3,7 +3,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Pango from 'gi://Pango';
 import St from 'gi://St';
-import { BackdropGlass } from '../rendering/backdropGlass.js';
+import { WallpaperGlass } from '../rendering/wallpaperGlass.js';
 import { ensureGlassAllocated } from '../actors/allocation.js';
 import { isActorValid } from '../actors/lifecycle.js';
 import { hexToColorArray } from '../animation/colors.js';
@@ -65,7 +65,7 @@ export class GlassClock {
     constructor(env) {
         this._env = env;
         this.actor = new St.Widget({ name: 'liquid-glass-desktop-clock', reactive: true });
-        this._glass = new BackdropGlass({
+        this._glass = new WallpaperGlass({
             extensionPath: env.path, settings: env.settings, logger: env.logger, owner: 'desktop-clock', shapeTexture: true,
         });
         this._glass.setPadding(0);
@@ -74,6 +74,7 @@ export class GlassClock {
         this._source = new DigitsSource(env.path, env.logger);
         this._date = new St.Label({ style_class: 'liquid-glass-clock-date' });
         this.actor.add_child(this._glass);
+        this.actor.add_child(this._glass.sourceActor);
         this.actor.add_child(this._date);
         connectClicks(this.actor, () => { }, (x, y) => env.menu(this, x, y));
         this._adaptive = new AdaptiveTextColor(() => [this._date], () => [this._glass], env.logger, 'clock');
