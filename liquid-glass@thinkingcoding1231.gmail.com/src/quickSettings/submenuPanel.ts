@@ -414,6 +414,7 @@ export class SubmenuPanel {
       const glassY = this._y - SHADER_PADDING;
 
       syncBackdropClone(this._bgClone);
+      this._bgClone.set_size(this._glassW, this._glassH);
       this._bgClone.set_position(-glassX, -glassY);
       if (!this._bgClone.visible) this._bgClone.show();
 

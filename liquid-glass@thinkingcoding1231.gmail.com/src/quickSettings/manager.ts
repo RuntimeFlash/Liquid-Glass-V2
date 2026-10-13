@@ -1338,6 +1338,9 @@ export class QuickSettingsManager {
           if (geometry.clipW !== unscaledW || geometry.clipH !== unscaledH) {
             clipBox.set_size(unscaledW, unscaledH);
             fboContainer.set_size(unscaledW, unscaledH);
+            // The clone's box is what a redraw of it can reach; without one it
+            // reports its source's, which is the whole monitor.
+            bgClone.set_size(unscaledW, unscaledH);
             geometry.clipW = unscaledW;
             geometry.clipH = unscaledH;
           }
@@ -3186,6 +3189,7 @@ export class QuickSettingsManager {
           fboContainer.set_size(fboW, fboH);
           fboContainer.set_pivot_point(0, 0);
           fboContainer.set_scale(fboScale, fboScale);
+          bgClone.set_size(roundedW, roundedH);
           geometry.fboW = fboW;
           geometry.fboH = fboH;
           geometry.fboScale = fboScale;

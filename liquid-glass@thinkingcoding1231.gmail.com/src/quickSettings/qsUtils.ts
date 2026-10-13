@@ -4,9 +4,15 @@ import Clutter from 'gi://Clutter';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { isOwnActor } from '../diagnostics/glass.js';
+import { undoCloneScale } from '../shellVersion.js';
 
 /**
  * A Clutter.Clone the Looking Glass picker passes through.
+ *
+ * Its paint volume is its own box, not its source's: a clone of the whole
+ * background group or of a maximised window would otherwise make every redraw
+ * of it damage the whole monitor, and a frame that damages the whole monitor
+ * recaptures every glass on it.
  */
 export const UnpickableClone = GObject.registerClass(
   {
@@ -15,6 +21,12 @@ export const UnpickableClone = GObject.registerClass(
   class UnpickableClone extends Clutter.Clone {
     vfunc_pick(_pickContext: any): void {
       // Picks fall through to the actors behind.
+    }
+
+    vfunc_get_paint_volume(volume: Clutter.PaintVolume): boolean {
+      if (!volume.set_from_allocation(this)) return false;
+      undoCloneScale(this, volume);
+      return true;
     }
   }
 );
@@ -28,6 +40,12 @@ export const UnpickableActor = GObject.registerClass(
   class UnpickableActor extends Clutter.Actor {
     vfunc_pick(_pickContext: any): void {
       // Picks fall through to the actors behind.
+    }
+
+    // Same reason as the clone's: the children are clipped to this box by their
+    // parent, so the box is all a redraw of this actor can reach.
+    vfunc_get_paint_volume(volume: Clutter.PaintVolume): boolean {
+      return volume.set_from_allocation(this);
     }
   }
 );
