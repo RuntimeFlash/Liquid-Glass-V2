@@ -7,6 +7,13 @@ const { dist } = require('./helpers/gpu.cjs');
 const placement = loadModule(path.join(dist, 'desktop/placement.js'), {});
 const rect = { x: 100, y: 200, width: 300, height: 150 };
 
+test('a desktop item is culled only when one opaque window fully covers it', () => {
+  assert.equal(placement.coversRect({ x: 0, y: 0, width: 1920, height: 1080 }, rect), true);
+  assert.equal(placement.coversRect({ x: 100, y: 200, width: 299, height: 150 }, rect), false);
+  assert.equal(placement.coversRect({ x: 100, y: 201, width: 300, height: 149 }, rect), false);
+  assert.equal(placement.coversRect({ x: 0, y: 0, width: 0, height: 1080 }, rect), false);
+});
+
 test('a right or bottom handle grows the rect away from its left and top edges', () => {
   assert.deepEqual(placement.resizeRect(rect, 1, 0, 50, 999, 48), { x: 100, y: 200, width: 350, height: 150 });
   assert.deepEqual(placement.resizeRect(rect, 0, 1, 999, -30, 48), { x: 100, y: 200, width: 300, height: 120 });

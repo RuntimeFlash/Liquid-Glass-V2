@@ -2,6 +2,19 @@
 // monitor's work area, or where the user moved it, kept as the fraction of
 // the work area its centre is at so it survives a resolution change.
 export const ANCHORS = ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'];
+
+/** Whether `cover` contains every visible pixel of `target`. */
+export function coversRect(cover, target) {
+    const values = [cover.x, cover.y, cover.width, cover.height,
+        target.x, target.y, target.width, target.height];
+    if (!values.every(Number.isFinite) || cover.width <= 0 || cover.height <= 0 ||
+        target.width <= 0 || target.height <= 0)
+        return false;
+    return cover.x <= target.x && cover.y <= target.y &&
+        cover.x + cover.width >= target.x + target.width &&
+        cover.y + cover.height >= target.y + target.height;
+}
+
 // Room between an item and the edge of the work area, and between items.
 export const EDGE_MARGIN = 32;
 export const ITEM_GAP = 16;

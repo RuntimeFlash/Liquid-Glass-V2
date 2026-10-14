@@ -143,9 +143,14 @@ export class GlassCard {
         return [0, 0, ...this.size()];
     }
 
-    sync() {
+    sync(exposed = true) {
         const shown = this.shown;
-        this.actor.visible = shown;
+        // A desktop card remains part of the layout while it is covered, but
+        // unmapping it is essential: a cached wallpaper blur still has to run its
+        // composite shader whenever the stage underneath a window is repainted.
+        const visible = shown && exposed;
+        if (this.actor.visible !== visible)
+            this.actor.visible = visible;
         const [w, h] = this.size();
         const key = `${w}x${h}`;
         const changed = key !== this._lastSize || shown !== this._lastShown;
@@ -161,7 +166,7 @@ export class GlassCard {
             this.actor.set_size(w, h);
             this._text.invalidate();
         }
-        if (shown && this.actor.mapped) {
+        if (visible && this.actor.mapped) {
             ensureGlassAllocated(this.glass);
             this.glass.syncSources();
         }
