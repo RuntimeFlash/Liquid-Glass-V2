@@ -230,10 +230,7 @@ export class DesktopLayer {
     const rects: Rect[] = [];
     for (const actor of global.get_window_actors() as Meta.WindowActor[]) {
       const window = actor.get_meta_window();
-      // X11's WindowActor reports visible=false even while its mapped surface
-      // is on screen. `mapped` plus full opacity is the compositor state that
-      // matters for whether it completely occludes the desktop layer.
-      if (!window || window.minimized || !actor.mapped || actor.opacity < 255)
+      if (!window || window.minimized || !actor.visible || actor.opacity < 255)
         continue;
       const type = window.get_window_type();
       if (type !== Meta.WindowType.NORMAL && type !== Meta.WindowType.DIALOG &&
