@@ -313,9 +313,15 @@ export class DashManager {
             this._hideGlass();
             return;
         }
+        // IntelliHide moves the dock fully off-screen. Keeping an invisible
+        // backdrop mapped still makes it track every stage paint (scrolling and
+        // video frames), so unmap it until there are pixels to draw.
+        if (!this._syncDockVisibility(bounds, monitor)) {
+            this._hideGlass();
+            return;
+        }
         this.glass.show();
         this.glass.opacity = this.targetActor.opacity;
-        this._syncDockVisibility(bounds, monitor);
         this._syncDockGlass(bounds, monitor);
     }
 
@@ -410,14 +416,14 @@ export class DashManager {
                     `monitor=(${monitor?.x},${monitor?.y},${monitor?.width}x${monitor?.height}) ` +
                     `margin=${this._marginValue}`);
             }
-            this.glass.opacity = 0;
+            return false;
         }
         else {
             if (this._lastHidden === true) {
                 this._lastHidden = false;
                 this._logger.log('[Liquid Glass][dock] glass visible again');
             }
-            this.glass.opacity = this.targetActor.opacity;
+            return true;
         }
     }
 
