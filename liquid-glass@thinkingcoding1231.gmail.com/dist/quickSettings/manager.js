@@ -6,6 +6,7 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Pango from 'gi://Pango';
 import { LiquidEffect } from './liquidEffect.js';
+import { markOpenTrigger, timed } from '../diagnostics/openLag.js';
 import { BackdropBlurEffect } from './backdropBlur.js';
 import { StageContrastSampler, AdaptiveContrastConfig } from './qsContrastSampler.js';
 import { UnpickableClone, UnpickableActor, suppressGnomePopupAnimation, hasStyleClass, hexToRgb, createBackdropClone, syncBackdropClone } from './qsUtils.js';
@@ -57,11 +58,13 @@ const QS_BLUR_FBO_DIVISOR = 2;
 // literals below were built on every open/close stop regardless of whether
 // anything consumes the output.
 const LG_DEBUG_ANIM = false;
-// How many leading animation ticks rebuild each card's window clones. The
-// clone children are pixel-identical for the length of the fade; the first
-// tick or two absorb the lazy layout pass, after which the per-card rebuild is
-// pure rework (see _syncBackingWindowClones / the tick in _startAnimation).
-const QS_ANIM_CLONE_REBUILD_FRAMES = 2;
+// Halving every blur radius for the length of a transition was the old way to
+// stay inside the frame budget. Shell's blur effect reallocates its offscreen
+// buffer whenever the radius changes, so that halved and then restored the
+// buffer of every card and of the overlay twice per open -- the FBO churn that
+// makes the first frame of an open stall -- and it also sharpened the frost
+// until the menu settled. Off: turn on to compare.
+const REDUCE_BLUR_DURING_TRANSITION = false;
 // Assumed frame length when converting the millisecond "Animation Interval"
 // setting into a number of frames between window-clone rebuilds.
 const QS_ASSUMED_FRAME_MS = 16.667;
@@ -213,11 +216,6 @@ export class QuickSettingsManager {
     // matrix transforms, and the per-card rect scratch used to cull window clones.
     _scratchPoint = null;
     _cardRectsScratch = [];
-    // Ticks remaining that still need the per-card window-clone rebuild. The
-    // clone children are pixel-identical for the length of the fade, so only the
-    // first frame or two pay for rebuilding them; later frames just move the
-    // container, which carries every child along.
-    _animCloneRebuildFrames = 0;
     // Pending "lazy widget" clip sweep (see _scheduleLateClipSweep).
     _clipSweepPendingId = 0;
     // Card count captured when the menu opened, so the late sweep can tell
@@ -511,6 +509,10 @@ export class QuickSettingsManager {
     // destroyed are skipped and dropped from the list. When no sweep has been
     // recorded for this root (e.g. the tree grew since), it walks afresh.
     _applyClipTargetsFor(root) {
+        return timed('clipTargets', () => this._applyClipTargetsForImpl(root));
+    }
+
+    _applyClipTargetsForImpl(root) {
         if (!root)
             return;
         let targets = this._clipTargetsByRoot.get(root);
@@ -1090,6 +1092,10 @@ export class QuickSettingsManager {
     // moved. `frameWindowActors` lets the animation tick reuse one snapshot of
     // global.get_window_actors() instead of re-fetching it per sync.
     _syncCardBackings(skipWindowClones = false, rebuildWindowClones = !skipWindowClones, frameWindowActors = null, forceCloneRebuild = false) {
+        return timed('cardBackings', () => this._syncCardBackingsImpl(skipWindowClones, rebuildWindowClones, frameWindowActors, forceCloneRebuild));
+    }
+
+    _syncCardBackingsImpl(skipWindowClones = false, rebuildWindowClones = !skipWindowClones, frameWindowActors = null, forceCloneRebuild = false) {
         if (!this.menu?.actor?.mapped && !this._isAnimating)
             return;
         let windowActors = frameWindowActors ?? global.get_window_actors();
@@ -1098,10 +1104,12 @@ export class QuickSettingsManager {
         // this dozens of times over (allocation bursts, clip sweeps, setting
         // changes), and that burst was most of the open's CPU. The window-set
         // token says whether a rebuild could change anything at all.
+        // The token records the window set the clones were last *built* for, not
+        // the last one merely seen: a move-only sync (the open frame) leaves a real
+        // set change pending so the next sync allowed to rebuild picks it up,
+        // instead of swallowing the change and leaving the clones stale.
         const windowSig = this._backdropWindowSignature();
         const windowSetChanged = forceCloneRebuild || windowSig !== this._cardCloneSig;
-        if (windowSetChanged)
-            this._cardCloneSig = windowSig;
         let parent = this.menu?.actor?.get_parent?.() || Main.layoutManager.uiGroup;
         // Recomputed once per sync. Acting as the tick's frame token, it also
         // thins the style-class work below to real animation frames.
@@ -1322,7 +1330,10 @@ export class QuickSettingsManager {
                     // consumed throttle budget can never leave glass permanently empty.
                     let backingClones = backing._liquidGlassWindowClones;
                     let backingNeedsBuild = (!backingClones || backingClones.size === 0) && windowActors.length > 0;
-                    this._syncBackingWindowClones(backing, sourceStageX, sourceStageY, windowActors, (rebuildWindowClones && !skipWindowClones && windowSetChanged) || backingNeedsBuild, projectionIsIdentity ? rect : null);
+                    let rebuildChildren = (rebuildWindowClones && !skipWindowClones && windowSetChanged) || backingNeedsBuild;
+                    if (rebuildChildren)
+                        this._cardCloneSig = windowSig;
+                    this._syncBackingWindowClones(backing, sourceStageX, sourceStageY, windowActors, rebuildChildren, projectionIsIdentity ? rect : null);
                 }
                 // Style classes only change when a card is re-classified, which
                 // happens on notify::allocation. Compare against the key this frame
@@ -1612,7 +1623,7 @@ export class QuickSettingsManager {
             }
             return GLib.SOURCE_CONTINUE;
         };
-        this._syncCardBackings(false, true, null, true);
+        this._syncCardBackings(false, true, null, false);
         // Same reason as the tick above: the backdrop has to be showing the real
         // windows on the frame the menu appears, before the first 16ms tick runs.
         // Move-only, so this costs nothing unless the window set actually changed.
@@ -2182,6 +2193,10 @@ export class QuickSettingsManager {
     }
 
     _applyCardEffects() {
+        return timed('applyCardEffects', () => this._applyCardEffectsImpl());
+    }
+
+    _applyCardEffectsImpl() {
         if (!this.animActor)
             return;
         let mainBoxChildren = this.animActor.get_children();
@@ -2744,6 +2759,7 @@ export class QuickSettingsManager {
         // sync. It owns the open/close frame loop from now on.
         this._createAnimation();
         this._animSignalId = this.menu.connect('open-state-changed', (menu, isOpen) => {
+            markOpenTrigger(isOpen ? 'qs-open' : 'qs-close');
             if (isOpen) {
                 for (let button of this._findAllButtons(this.menu?.actor)) {
                     if (button instanceof St.Widget && typeof button.set_style === 'function') {
@@ -3063,6 +3079,10 @@ export class QuickSettingsManager {
     // feathered mask can fade the edges smoothly.
     // rebuildWindowClones=false moves only the clone container (animation ticks).
     _syncBlurOverlayGeometry(frameWindowActors = null, rebuildWindowClones = true) {
+        return timed('syncBlur', () => this._syncBlurOverlayGeometryImpl(frameWindowActors, rebuildWindowClones));
+    }
+
+    _syncBlurOverlayGeometryImpl(frameWindowActors = null, rebuildWindowClones = true) {
         if (!this._qsBlurOverlay || !this._stampActor)
             return;
         // Quick Settings drives the sheet from the popup's settled rect; the shared
@@ -3344,6 +3364,10 @@ export class QuickSettingsManager {
 
     // Starts the timer for periodically sampling contrast and updating adaptive text colors
     _startAdaptiveColorSampling(skipAnimations = false) {
+        return timed('adaptiveStart', () => this._startAdaptiveColorSamplingImpl(skipAnimations));
+    }
+
+    _startAdaptiveColorSamplingImpl(skipAnimations = false) {
         if (!this._adaptiveConfig.enabled)
             return;
         this._updateAdaptiveTextColors(skipAnimations);
@@ -3354,7 +3378,12 @@ export class QuickSettingsManager {
                 this._adaptiveTimerId = 0;
                 return GLib.SOURCE_REMOVE;
             }
-            this._updateAdaptiveTextColors(false);
+            // The periodic pass walks the tree synchronously and resolves into a
+            // style relayout, both of which land mid-animation if the timer fires
+            // during a transition. The open sampled already and the settle pass
+            // re-samples, so just skip the ticks that overlap the animation.
+            if (!this._isAnimating)
+                this._updateAdaptiveTextColors(false);
             return GLib.SOURCE_CONTINUE;
         });
     }
@@ -3369,6 +3398,10 @@ export class QuickSettingsManager {
 
     // Collects target actors, samples their contrast, and triggers color updates
     _updateAdaptiveTextColors(skipAnimations = false) {
+        return timed('adaptiveSample', () => this._updateAdaptiveTextColorsImpl(skipAnimations));
+    }
+
+    _updateAdaptiveTextColorsImpl(skipAnimations = false) {
         if (!this._adaptiveConfig.enabled || this._adaptiveInFlight)
             return;
         const targets = this._collectAdaptiveTextTargets();
@@ -3703,11 +3736,12 @@ export class QuickSettingsManager {
 
     _onAnimationStart(opening) {
         this._isAnimating = true;
-        this._animCloneRebuildFrames = opening ? QS_ANIM_CLONE_REBUILD_FRAMES : 0;
-        try {
-            this._setTransitionBlurReduced(true);
+        if (REDUCE_BLUR_DURING_TRANSITION) {
+            try {
+                this._setTransitionBlurReduced(true);
+            }
+            catch (e) { }
         }
-        catch (e) { }
     }
 
     /**
@@ -3717,6 +3751,10 @@ export class QuickSettingsManager {
      * the same opacity, so content and liquid glass can never drift apart.
      */
     _onAnimationFrame(scale, opacity, opening) {
+        return timed('animFrame', () => this._onAnimationFrameImpl(scale, opacity, opening));
+    }
+
+    _onAnimationFrameImpl(scale, opacity, opening) {
         // The backdrop is painted from the first frame of the transition, with the
         // same opacity the content has at that moment, so the blur and the glass
         // fade in together rather than the blur arriving once the popup has stopped
@@ -3738,17 +3776,15 @@ export class QuickSettingsManager {
                 this._qsBlurOverlay.hide();
             }
         }
-        // Window clones are pixel-identical for the length of a fade, so only the
-        // leading frames of an open pay for rebuilding them; the rest just move the
-        // container. A backing with no clones yet always builds (see
-        // _syncCardBackings), so a spent budget can never leave glass empty.
-        let rebuildClones = false;
-        if (opening && this._animCloneRebuildFrames > 0 && this._cardActors.size > 0) {
-            this._animCloneRebuildFrames--;
-            rebuildClones = true;
-        }
+        // The window-set token already says when the clones stop being valid (a
+        // restack, a resize, a workspace switch), and a backing with no clones yet
+        // always builds (see _syncCardBackings). Forcing a rebuild on the leading
+        // frames therefore only redid work the move-only sync already does -- it
+        // rebuilt every clone's geometry mid-animation, and the relayout that
+        // follows is the 50-80ms frame the open kept stalling on. Let the token
+        // decide.
         try {
-            this._syncCardBackings(false, rebuildClones, null, rebuildClones);
+            this._syncCardBackings(false, true, null, false);
         }
         catch (e) { }
     }
@@ -3774,12 +3810,17 @@ export class QuickSettingsManager {
     }
 
     _onAnimationSettled(opening) {
+        return timed('settled', () => this._onAnimationSettledImpl(opening));
+    }
+
+    _onAnimationSettledImpl(opening) {
         this._isAnimating = false;
-        this._animCloneRebuildFrames = 0;
-        try {
-            this._setTransitionBlurReduced(false);
+        if (REDUCE_BLUR_DURING_TRANSITION) {
+            try {
+                this._setTransitionBlurReduced(false);
+            }
+            catch (e) { }
         }
-        catch (e) { }
         if (opening) {
             // Land on exactly 1.0 / 255: settling on 0.9987 leaves the whole menu
             // scaled by a fraction and the text visibly resampled.
@@ -3804,7 +3845,6 @@ export class QuickSettingsManager {
         }
         // Closed. Hand the popup back to GNOME and finish the bookkeeping that the
         // suppressed BoxPointer.close() would have done.
-        this._animCloneRebuildFrames = 0;
         try {
             this.menu?.actor?.hide?.();
             this.menu?._boxPointer?.hide?.();
@@ -3858,6 +3898,10 @@ export class QuickSettingsManager {
     }
 
     _runLateClipSweep() {
+        return timed('lateClipSweep', () => this._runLateClipSweepImpl());
+    }
+
+    _runLateClipSweepImpl() {
         if (this._clipSweepPendingId !== 0) {
             try {
                 GLib.source_remove(this._clipSweepPendingId);
