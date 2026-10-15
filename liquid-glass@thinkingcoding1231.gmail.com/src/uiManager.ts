@@ -15,6 +15,7 @@ import { UnpickableWidget } from './actors/unpickable.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { resolveMonitorGeometry, getAllocatedSize } from './actors/geometry.js';
 import { isActorValid } from './actors/lifecycle.js';
+import { setOpacityIfChanged } from './actors/writes.js';
 import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
 import { placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS } from './actors/glassBounds.js';
 import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex } from './animation/colors.js';
@@ -885,7 +886,7 @@ export class UIManager {
       this.glass.show();
     }
     if (!this._enableAnimation) {
-      this.glass.opacity = this.targetActor.opacity;
+      setOpacityIfChanged(this.glass, this.targetActor.opacity);
     }
     return true;
   }

@@ -48,6 +48,13 @@ export function setScaleIfChanged(actor: any, scaleX: number, scaleY: number): b
   return writeIfChanged(actor, 'scale', [scaleX, scaleY], () => actor.set_scale(scaleX, scaleY));
 }
 
+// Opacity is animated by several shell-owned actors.  Glass follows that
+// value from a before-update callback, where assigning the same opacity can
+// otherwise invalidate the glass every frame and force a new backdrop copy.
+export function setOpacityIfChanged(actor: any, opacity: number): boolean {
+  return writeIfChanged(actor, 'opacity', [opacity], () => { actor.opacity = opacity; });
+}
+
 export function setClipIfChanged(actor: any, x: number, y: number, width: number, height: number): boolean {
   return writeIfChanged(actor, 'clip', [x, y, width, height], () => actor.set_clip(x, y, width, height));
 }

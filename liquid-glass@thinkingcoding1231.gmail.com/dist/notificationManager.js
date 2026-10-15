@@ -9,7 +9,7 @@ import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference }
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { getTransformedRect, resolveMonitorGeometry } from './actors/geometry.js';
 import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
-import { setClipIfChanged } from './actors/writes.js';
+import { setClipIfChanged, setOpacityIfChanged } from './actors/writes.js';
 import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb } from './animation/colors.js';
 import { BANNER_TRANSPARENT_CLASS } from './shellVersion.js';
 // Room around the glass rect for the shader's edge effects.
@@ -349,7 +349,7 @@ export class NotificationManager {
             this.glass.hide();
             return;
         }
-        this.glass.opacity = opacity;
+        setOpacityIfChanged(this.glass, opacity);
         this.glass.show();
         const bgW = w + this._glassExpand * 2 + SHADER_PADDING * 2;
         const bgH = h + this._glassExpand * 2 + SHADER_PADDING * 2;

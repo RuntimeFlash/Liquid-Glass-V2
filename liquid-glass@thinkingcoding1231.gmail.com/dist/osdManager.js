@@ -9,7 +9,7 @@ import { reportFrameLoopError } from './diagnostics/logging.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { isFrameSyncFrozen, SAME_FRAME_WINDOW_US } from './animation/frameSync.js';
 import { startStageLoop, stopStageLoop } from './animation/frameLoops.js';
-import { setClipIfChanged } from './actors/writes.js';
+import { setClipIfChanged, setOpacityIfChanged } from './actors/writes.js';
 import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex } from './animation/colors.js';
 // Room around the glass rect for the shader's edge effects.
 const SHADER_PADDING = 20;
@@ -309,7 +309,7 @@ export class OsdManager {
         else if (!isVisible && state._wasVisible) {
             state._wasVisible = false;
         }
-        glass.opacity = currentOpacity;
+        setOpacityIfChanged(glass, currentOpacity);
         if (!isVisible) {
             glass.hide();
             return;

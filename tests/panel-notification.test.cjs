@@ -114,6 +114,7 @@ function notificationFixture() {
     resolveMonitorGeometry: () => monitor,
     // Perf helpers from the render branch; stubbed to their plain behaviour.
     setClipIfChanged: (actor, ...clip) => actor.set_clip(...clip),
+    setOpacityIfChanged: (actor, value) => { actor.opacity = value; },
     isFrameSyncFrozen: () => false,
   });
   const manager = new C('', new Settings(), { error() {} });

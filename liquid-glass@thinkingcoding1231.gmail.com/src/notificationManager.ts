@@ -10,7 +10,7 @@ import Gio from 'gi://Gio';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { getTransformedRect, resolveMonitorGeometry } from './actors/geometry.js';
 import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
-import { setClipIfChanged } from './actors/writes.js';
+import { setClipIfChanged, setOpacityIfChanged } from './actors/writes.js';
 import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb } from './animation/colors.js';
 
 import { Logger } from './logger.js';
@@ -381,7 +381,7 @@ export class NotificationManager {
       this.glass.hide();
       return;
     }
-    this.glass.opacity = opacity;
+    setOpacityIfChanged(this.glass, opacity);
     this.glass.show();
 
     const bgW = w + this._glassExpand * 2 + SHADER_PADDING * 2;
