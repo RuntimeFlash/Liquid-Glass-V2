@@ -82,7 +82,9 @@ export class AdaptiveTextColor {
         const skip = this._first;
         this._first = false;
         const glasses = () => this._glasses().filter(g => g.mapped);
-        this._sampler.chooseColorsForActors(targets, this._config, null, () => glasses().reduce((sum, g) => sum + (g.paintCount ?? NaN), 0), glasses)
+        const signature = this._options.signature ??
+            (() => glasses().reduce((sum, g) => sum + (g.paintCount ?? NaN), 0));
+        this._sampler.chooseColorsForActors(targets, this._config, null, signature, glasses)
             .then(colors => {
             const batch = GLib.get_monotonic_time();
             for (const [actor, color] of colors)

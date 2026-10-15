@@ -90,8 +90,10 @@ export abstract class GlassCard implements DesktopItem {
   protected readonly glass: WallpaperGlass;
   protected env: ItemEnv;
   private _settingsIds: number[] = [];
+  private _styleId = 0;
   private _lastSize = '';
   private _lastShown = false;
+  private _needsMeasure = true;
   private _text: AdaptiveTextColor;
   private _shown = true;
 
@@ -110,7 +112,10 @@ export abstract class GlassCard implements DesktopItem {
     this.actor.add_child(this.box);
     connectClicks(this.actor, () => this.activate(), (x, y) => env.menu(this, x, y));
 
-    this._text = new AdaptiveTextColor(() => [this.box], () => [this.glass], env.logger, `desktop ${id}`);
+    this._text = new AdaptiveTextColor(() => [this.box], () => [this.glass], env.logger, `desktop ${id}`, {
+      signature: () => this.glass.backdropSerial,
+    });
+    this._styleId = this.box.connect('style-changed', () => { this._needsMeasure = true; });
     const watch = (key: string, fn: () => void) =>
       this._settingsIds.push(env.settings.connect(`changed::${key}`, fn));
     for (const key of ['tint-color', 'tint-strength', 'blur-radius', 'corner-radius', 'brightness', 'contrast', 'saturation'])
@@ -131,6 +136,7 @@ export abstract class GlassCard implements DesktopItem {
   set shown(shown: boolean) {
     if (shown === this._shown) return;
     this._shown = shown;
+    this._needsMeasure = true;
     this.env.relayout();
   }
 
@@ -145,6 +151,9 @@ export abstract class GlassCard implements DesktopItem {
     g.setContrast(s.get_double('desktop-widget-contrast'));
     g.setSaturation(s.get_double('desktop-widget-saturation'));
     this.box.set_style(`border-radius: ${s.get_double('desktop-widget-corner-radius')}px;`);
+    // The text colour is measured against the tinted glass, so a material
+    // change has to re-measure it even though the wallpaper did not move.
+    this._text.invalidate();
   }
 
   private _syncText(): void {
@@ -159,6 +168,7 @@ export abstract class GlassCard implements DesktopItem {
 
   // The content changed; measure the text colour again.
   protected contentChanged(): void {
+    this._needsMeasure = true;
     this._text.invalidate();
     this.env.relayout();
   }
@@ -180,21 +190,30 @@ export abstract class GlassCard implements DesktopItem {
     // composite shader whenever the stage underneath a window is repainted.
     const visible = shown && exposed;
     if (this.actor.visible !== visible) this.actor.visible = visible;
-    const [w, h] = this.size();
-    const key = `${w}x${h}`;
-    const changed = key !== this._lastSize || shown !== this._lastShown;
+    let changed = shown !== this._lastShown;
     this._lastShown = shown;
-    if (key !== this._lastSize) {
-      this._lastSize = key;
-      const m = SHADOW_MARGIN;
-      const p = SHADER_PADDING;
-      this.glass.set_position(-m, -m);
-      this.glass.set_size(w + m * 2, h + m * 2);
-      this.glass.setResolution(w + m * 2, h + m * 2);
-      this.glass.setGlassGeometry(m - p, m - p, w + p * 2, h + p * 2);
-      this.actor.set_size(w, h);
-      this._text.invalidate();
+
+    // The content can change size without a signal, so it is measured again
+    // only when contentChanged() or a style change says it may have; measuring
+    // the preferred size every frame was pure polling.
+    if (this._needsMeasure) {
+      this._needsMeasure = false;
+      const [w, h] = this.size();
+      const key = `${w}x${h}`;
+      if (key !== this._lastSize) {
+        this._lastSize = key;
+        const m = SHADOW_MARGIN;
+        const p = SHADER_PADDING;
+        this.glass.set_position(-m, -m);
+        this.glass.set_size(w + m * 2, h + m * 2);
+        this.glass.setResolution(w + m * 2, h + m * 2);
+        this.glass.setGlassGeometry(m - p, m - p, w + p * 2, h + p * 2);
+        this.actor.set_size(w, h);
+        this._text.invalidate();
+        changed = true;
+      }
     }
+
     if (visible && this.actor.mapped) {
       ensureGlassAllocated(this.glass);
       this.glass.syncSources();
@@ -203,6 +222,8 @@ export abstract class GlassCard implements DesktopItem {
   }
 
   destroy(): void {
+    if (this._styleId) this.box.disconnect(this._styleId);
+    this._styleId = 0;
     for (const id of this._settingsIds) this.env.settings.disconnect(id);
     this._settingsIds = [];
     this._text.clear();

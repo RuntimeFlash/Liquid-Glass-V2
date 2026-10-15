@@ -4,6 +4,7 @@ import GLib from 'gi://GLib';
 import { BackdropGlass } from './rendering/backdropGlass.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { isActorValid } from './actors/lifecycle.js';
+import { setOpacityIfChanged } from './actors/writes.js';
 import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
 import { hexToColorArray } from './animation/colors.js';
 import { sanitizeColorPreference } from './contrastSampler.js';
@@ -199,7 +200,8 @@ export class TopBarManager {
     _boxExtent(box) {
         let x0 = Infinity, x1 = -Infinity;
         const [bx] = box.get_position();
-        for (const child of box.get_children()) {
+        // Sibling walk: this runs for every box on every stage frame.
+        for (let child = box.get_first_child(); child; child = child.get_next_sibling()) {
             if (!child.visible || child.width < 1)
                 continue;
             const alloc = child.get_allocation_box();
@@ -222,7 +224,7 @@ export class TopBarManager {
         }
         if (!glass.visible)
             glass.show();
-        glass.opacity = Math.round(panelBox.opacity * panel.opacity / 255);
+        setOpacityIfChanged(glass, Math.round(panelBox.opacity * panel.opacity / 255));
         const [x, y] = panelBox.get_transformed_position();
         const width = Math.round(panelBox.width);
         const height = Math.round(panel.height);

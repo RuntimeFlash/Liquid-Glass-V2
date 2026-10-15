@@ -8,7 +8,7 @@ import { reportFrameLoopError } from './diagnostics/logging.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { isFrameSyncFrozen, SAME_FRAME_WINDOW_US } from './animation/frameSync.js';
 import { startStageLoop, stopStageLoop } from './animation/frameLoops.js';
-import { setClipIfChanged } from './actors/writes.js';
+import { setClipIfChanged, setOpacityIfChanged } from './actors/writes.js';
 import { isActorValid } from './actors/lifecycle.js';
 import { hexToColorArray } from './animation/colors.js';
 
@@ -19,6 +19,10 @@ import { Logger } from './logger.js';
 
 // Room around the glass rect for the shader's edge effects.
 const SHADER_PADDING = 20;
+
+// A hidden glass whose dock has not moved still gets a full sync this often,
+// so a dock that is shown again without moving is never left glassless.
+const SETTLED_RESYNC_FRAMES = 90;
 
 export class DashManager {
   private extensionPath: string;
@@ -38,6 +42,10 @@ export class DashManager {
   private _frameSyncId: number;
   private _frameSignalId = 0;
   private _lastTickUs = 0;
+  // The dock's transformed position at the last frame tick, so a settled
+  // hidden dock can skip the sync; see frameTick.
+  private _lastTickX: number | undefined;
+  private _lastTickY: number | undefined;
   private _isEffectActive: boolean;
 
   private _originalStyle: string | undefined;
@@ -57,6 +65,11 @@ export class DashManager {
 
   private _lastBaseW: number | undefined;
   private _lastBaseH: number | undefined;
+
+  // The running-app indicator the gaps are balanced around. Dash to Dock
+  // keeps the same actor for an icon's lifetime, so it is looked up once
+  // instead of walking the whole dock on every frame.
+  private _refActor: Clutter.Actor | null = null;
 
   private _marginValue: number = 0;
   // Tracks the hide/show transition so the reason is logged once, not per frame.
@@ -219,6 +232,7 @@ export class DashManager {
     this._lastTW = this._lastTH = undefined;
     this._stableDeltaW = this._stableDeltaH = undefined;
     this._lastHidden = undefined;
+    this._lastTickX = this._lastTickY = undefined;
 
     this.targetActor.add_style_class_name('liquid-glass-transparent');
 
@@ -280,6 +294,7 @@ export class DashManager {
     // while nothing changes. Errors are reported rate-limited instead of
     // logged every frame; SAME_FRAME_WINDOW_US keeps two stage views from
     // stepping it twice in one frame.
+    let settledFrames = 0;
     let frameTick = () => {
       if (!this._isEffectActive || !this.glass || !this.targetActor.mapped) return;
       if (isFrameSyncFrozen()) return;
@@ -287,6 +302,19 @@ export class DashManager {
       const nowUs = GLib.get_monotonic_time();
       if (nowUs - this._lastTickUs < SAME_FRAME_WINDOW_US) return;
       this._lastTickUs = nowUs;
+      // While the glass is hidden and the dock has not moved, the sync has
+      // nothing to do: both paths that hide it unmap it, so its own mapped
+      // state is the reliable signal (the collapsed-geometry path never
+      // reaches _syncDockVisibility(), the flag it sets). Dash to Dock slides
+      // the dock by relayout, so a change shows up here as a new transformed
+      // position and the sync resumes.
+      const [tickX, tickY] = this.targetActor.get_transformed_position();
+      const settled = !this.glass.mapped &&
+        tickX === this._lastTickX && tickY === this._lastTickY;
+      this._lastTickX = tickX;
+      this._lastTickY = tickY;
+      if (settled && ++settledFrames < SETTLED_RESYNC_FRAMES) return;
+      settledFrames = 0;
       try {
         // Checked before this frame's sync dirties anything.
         ensureGlassAllocated(this.glass);
@@ -365,7 +393,7 @@ export class DashManager {
       return;
     }
     this.glass.show();
-    this.glass.opacity = this.targetActor.opacity;
+    setOpacityIfChanged(this.glass, this.targetActor.opacity);
     this._syncDockGlass(bounds, monitor);
   }
 
@@ -573,6 +601,7 @@ export class DashManager {
       }
     }
     this._originalStyle = undefined;
+    this._refActor = null;
     if (isActorValid(this._dockParent))
       this._dockParent!.remove_style_class_name('liquid-glass-transparent');
     this._dockParent = null;
@@ -597,12 +626,22 @@ export class DashManager {
   // The first running-app indicator inside the dock (Dash to Dock's
   // IndicatorDrawingArea), used to balance the gaps around the icons.
   private _findReferenceActor(actor: Clutter.Actor): Clutter.Actor | null {
+    const cached = this._refActor;
+    if (cached && isActorValid(cached) && cached.mapped) return cached;
+    this._refActor = this._searchReferenceActor(actor);
+    return this._refActor;
+  }
+
+  private _searchReferenceActor(actor: Clutter.Actor): Clutter.Actor | null {
     if (!actor) return null;
-    if (actor.toString().includes('IndicatorDrawingArea'))
+    // The shell maps Actor.toString() to St.describe_actor(), which walks and
+    // formats the whole subtree; this runs for every actor on every frame, so
+    // the GType name is read instead.
+    if (((actor as any).constructor?.$gtype?.name ?? '').includes('IndicatorDrawingArea'))
       return actor;
 
-    for (const child of actor.get_children()) {
-      const found = this._findReferenceActor(child);
+    for (let child = actor.get_first_child(); child; child = child.get_next_sibling()) {
+      const found = this._searchReferenceActor(child);
       if (found)
         return found;
     }

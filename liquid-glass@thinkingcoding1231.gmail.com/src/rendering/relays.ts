@@ -6,6 +6,7 @@
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
 import Graphene from 'gi://Graphene';
+import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 
@@ -26,6 +27,13 @@ const SAMPLE_BASE = 256;
 // Room for a server-side shadow around a window that moved this frame, whose
 // paint volume is not known yet (see windowReaches()).
 const WINDOW_SHADOW_MARGIN = 80;
+
+// The set of actors behind a glass changes only when something is mapped or
+// unmapped under it, which is rare, while collecting it costs a paint volume
+// per window and container on every frame. The set is rebuilt at most this
+// often, and at once whenever the glass rect moves, because then the set of
+// actors that reach it really does change.
+const COLLECT_INTERVAL_US = 120_000;
 
 // A relay is hidden only once its source is this much further away than it
 // had to come to be shown, so a source on the edge of a growing or moving
@@ -83,6 +91,8 @@ export class RelaySet {
   // are visited and Clutter keeps forwarding their sources' redraws.
   readonly area: Clutter.Actor;
   private _relays = new Map<Clutter.Actor, Clutter.Clone>();
+  private _lastCollectUs = 0;
+  private _lastRectKey = '';
   changes = 0;
 
   // `exclude` names actors painted before the owner that are not part of
@@ -102,6 +112,13 @@ export class RelaySet {
     const [x, y, w, h] = rect;
     setTranslationIfChanged(this.area, x, y);
     setScaleIfChanged(this.area, w / SAMPLE_BASE, h / SAMPLE_BASE);
+
+    const key = `${x},${y},${w},${h}`;
+    const rectMoved = key !== this._lastRectKey;
+    this._lastRectKey = key;
+    const now = GLib.get_monotonic_time();
+    if (!rectMoved && now - this._lastCollectUs < COLLECT_INTERVAL_US) return false;
+    this._lastCollectUs = now;
 
     // A relay out of reach is hidden rather than destroyed, and shown again
     // when its source comes back: Clutter redraws the whole stage for an

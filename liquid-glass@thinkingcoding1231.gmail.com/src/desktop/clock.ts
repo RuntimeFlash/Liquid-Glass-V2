@@ -90,7 +90,9 @@ export class GlassClock implements DesktopItem {
     this.actor.add_child(this._date);
     connectClicks(this.actor, () => {}, (x, y) => env.menu(this, x, y));
 
-    this._adaptive = new AdaptiveTextColor(() => [this._date], () => [this._glass], env.logger, 'clock');
+    this._adaptive = new AdaptiveTextColor(() => [this._date], () => [this._glass], env.logger, 'clock', {
+      signature: () => this._glass.backdropSerial,
+    });
     const watch = (key: string, fn: () => void) => this._settingsIds.push(env.settings.connect(`changed::${key}`, fn));
     for (const key of ['glass-clock-font', 'glass-clock-size', 'glass-clock-stretch', 'glass-clock-height', 'glass-clock-tall-style'])
       watch(key, () => this._queueFont());
@@ -117,6 +119,8 @@ export class GlassClock implements DesktopItem {
     g.setBrightness(s.get_double('glass-clock-brightness'));
     g.setContrast(s.get_double('glass-clock-contrast'));
     g.setSaturation(s.get_double('glass-clock-saturation'));
+    // The date's colour is measured against the tinted glass.
+    this._adaptive.invalidate();
   }
 
   private _syncAdaptive(): void {

@@ -15,6 +15,10 @@ export interface AdaptiveTextOptions {
   ownColor?: boolean;
   // Measurements wait while this holds, for a surface whose glass is still changing size.
   held?: () => boolean;
+  // Advances when the backdrop could have changed. Defaults to the glasses'
+  // paint count; a wallpaper-backed glass passes its capture serial instead,
+  // so a covered glass that keeps being painted does not keep re-measuring.
+  signature?: () => number;
 }
 
 /**
@@ -81,8 +85,9 @@ export class AdaptiveTextColor {
     const skip = this._first;
     this._first = false;
     const glasses = () => this._glasses().filter(g => g.mapped);
-    this._sampler.chooseColorsForActors(targets, this._config, null,
-      () => glasses().reduce((sum, g: any) => sum + (g.paintCount ?? NaN), 0), glasses)
+    const signature = this._options.signature ??
+      (() => glasses().reduce((sum, g: any) => sum + (g.paintCount ?? NaN), 0));
+    this._sampler.chooseColorsForActors(targets, this._config, null, signature, glasses)
       .then(colors => {
         const batch = GLib.get_monotonic_time();
         for (const [actor, color] of colors) this._apply(actor, color, skip, batch);

@@ -76,6 +76,16 @@ export const WallpaperGlass = GObject.registerClass(paintNodeWithContext(
       return this._captureActor;
     }
 
+    /**
+     * Bumped whenever the captured wallpaper could have changed, i.e. whenever
+     * the pixels behind the glass change. Adaptive text keys on this rather
+     * than on the paint count, since painting the same capture again changes
+     * nothing under the text.
+     */
+    get backdropSerial(): number {
+      return this._serial;
+    }
+
     private _watchWallpaper(): void {
       const background = new Gio.Settings({ schema_id: 'org.gnome.desktop.background' });
       const appearance = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
@@ -115,19 +125,24 @@ export const WallpaperGlass = GObject.registerClass(paintNodeWithContext(
         Math.max(1, Math.round(s[2] * kx)), Math.max(1, Math.round(s[3] * ky)),
       ];
       const monitorIndex = this._monitorIndexFor(rect);
-      if (monitorIndex !== this._monitorIndex) this._rebuildCapture(monitorIndex);
+      const monitorChanged = monitorIndex !== this._monitorIndex;
+      if (monitorChanged) this._rebuildCapture(monitorIndex);
       const monitor = Main.layoutManager.monitors[this._monitorIndex];
       if (!monitor || !this._manager)
         return;
 
-      if (!this._same(this._lastRect, rect)) {
+      const rectChanged = !this._same(this._lastRect, rect);
+      if (rectChanged) {
         this._lastRect = rect;
         this._rect = rect;
         this._captureActor.set_position(px + Math.round(s[0] * kx), py + Math.round(s[1] * ky));
         this._captureActor.set_size(rect[2], rect[3]);
         this._wallpaperChanged();
       }
-      this._manager.backgroundActor.set_position(monitor.x - rect[0], monitor.y - rect[1]);
+      // The wallpaper actor is only re-anchored when the capture it feeds
+      // changed; a rebuild left it at the origin and lands here as well.
+      if (rectChanged || monitorChanged)
+        this._manager.backgroundActor.set_position(monitor.x - rect[0], monitor.y - rect[1]);
     }
 
     private _same(a: number[], b: number[]): boolean {

@@ -56,6 +56,10 @@ export class MediaWidget extends GlassCard {
   private _ownerChangedId = 0;
   private _cancellable = new Gio.Cancellable();
   private _current: Player | null = null;
+  // Whether the desktop layer considers the card on screen, and whether a
+  // player is playing; see _listen() and sync().
+  private _exposed = true;
+  private _playing = false;
 
   constructor(env: ItemEnv) {
     super('media', env, CARD_WIDTH);
@@ -186,16 +190,33 @@ export class MediaWidget extends GlassCard {
   }
 
   // The bars follow the sound while a player plays, and lie down otherwise.
+  // Only while the card can actually be seen: the frame ticker that animates
+  // them also keeps the compositor rendering frames, so a card covered by a
+  // window would hold the whole shell at the display's refresh rate for as
+  // long as anything is playing.
   private _listen(playing: boolean): void {
+    this._playing = playing;
     const on = this.env.settings.get_boolean('media-visualizer');
     this._bars.visible = on;
-    if (on && playing && this.shown) {
+    if (on && playing && this.shown && this._exposed) {
       this._spectrum.start();
       return;
     }
     this._spectrum.stop();
     this._targets = new Array(BAR_COUNT).fill(0);
-    this._animateBars();
+    if (this._exposed) this._animateBars();
+    else this._levels = new Array(BAR_COUNT).fill(0);
+  }
+
+  // The desktop layer hides the card behind an opaque window; stop the
+  // visualizer with it instead of animating a card nobody can see.
+  sync(exposed: boolean = true): boolean {
+    const changed = super.sync(exposed);
+    if (exposed !== this._exposed) {
+      this._exposed = exposed;
+      this._listen(this._playing);
+    }
+    return changed;
   }
 
   private _animateBars(): void {

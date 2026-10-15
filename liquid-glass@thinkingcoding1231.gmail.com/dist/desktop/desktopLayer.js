@@ -173,7 +173,9 @@ export class DesktopLayer {
     // its window from global.get_window_actors(), hence the window group.
     _desktopWindow() {
         let top = null;
-        for (const actor of global.window_group.get_children()) {
+        // Walking the siblings avoids the GList-to-array conversion get_children()
+        // does; this runs on every stage frame.
+        for (let actor = global.window_group.get_first_child(); actor; actor = actor.get_next_sibling()) {
             if (!(actor instanceof Meta.WindowActor))
                 continue;
             const window = actor.get_meta_window();
@@ -242,7 +244,11 @@ export class DesktopLayer {
             return [];
         const activeWorkspace = global.workspace_manager.get_active_workspace();
         const rects = [];
-        for (const actor of global.get_window_actors()) {
+        // Sibling walk, not global.get_window_actors(): this runs every frame and
+        // a GList-to-array conversion per frame is measurable.
+        for (let actor = global.window_group.get_first_child(); actor; actor = actor.get_next_sibling()) {
+            if (!(actor instanceof Meta.WindowActor))
+                continue;
             const window = actor.get_meta_window();
             if (!window || window.minimized || !actor.visible || actor.opacity < 255)
                 continue;
