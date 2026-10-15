@@ -113,6 +113,9 @@ uniform float region_tint_b[MAX_GLASS_REGIONS];
 // Strength of each region's own colour, separate from tint_strength so the
 // two tints stay independent. 0 when the colour could not be resolved.
 uniform float region_base_strength[MAX_GLASS_REGIONS];
+// Corner radius per region, so a grid can mix circles, pills and rectangles.
+// 0 means "use the global corner_radius".
+uniform float region_radius[MAX_GLASS_REGIONS];
 
 #ifdef LG_SHAPE_TEXTURE
 // The outline as distance fields over the dock_* rect, for glass text: the
@@ -177,12 +180,13 @@ float sdRoundRect(vec2 p, vec2 b, vec2 corner) {
 // The region this pixel is most inside of, with its local frame and colours.
 // Far outside every region the local position stays large, which main()
 // already treats as transparent.
-void findActiveRegion(vec2 pixel_coord, float pad, out vec2 outLocalPos, out vec2 outBoxSize, out vec3 outTint, out float outBaseStrength) {
+void findActiveRegion(vec2 pixel_coord, float pad, out vec2 outLocalPos, out vec2 outBoxSize, out vec3 outTint, out float outBaseStrength, out float outRadius) {
     float bestD = 1.0e6;
     outLocalPos = vec2(1.0e6);
     outBoxSize = vec2(1.0);
     outTint = vec3(1.0);
     outBaseStrength = 0.0;
+    outRadius = corner_radius;
 
     int count = int(min(region_count, float(MAX_GLASS_REGIONS)));
 
@@ -197,15 +201,19 @@ void findActiveRegion(vec2 pixel_coord, float pad, out vec2 outLocalPos, out vec
         vec2 actual_size = rSize - vec2(pad * 2.0);
         vec2 rBox = max(actual_size * 0.5, vec2(1.0));
 
+        // A region with no radius of its own (0) keeps the global one.
+        float rRadius = region_radius[i] > 0.0 ? region_radius[i] : corner_radius;
+
         // Picking the region needs no continuous corners; main() measures the
         // chosen one with them.
-        float d = sdCircleRoundRect(rLocal, rBox, corner_radius);
+        float d = sdCircleRoundRect(rLocal, rBox, rRadius);
         if (d < bestD) {
             bestD = d;
             outLocalPos = rLocal;
             outBoxSize = rBox;
             outTint = vec3(region_tint_r[i], region_tint_g[i], region_tint_b[i]);
             outBaseStrength = region_base_strength[i];
+            outRadius = rRadius;
         }
     }
 }
@@ -588,11 +596,13 @@ void main() {
     vec2 local_pos;
     vec2 box_size;
     vec3 activeTint;
+    // The chosen region's corner radius (multi-region) or the global one.
+    float activeRadius = corner_radius;
     // The element's own colour strength; 0 outside multi-region mode.
     float activeBaseStrength = 0.0;
 
     if (multi_region_mode > 0.5) {
-        findActiveRegion(pixel_coord, padding, local_pos, box_size, activeTint, activeBaseStrength);
+        findActiveRegion(pixel_coord, padding, local_pos, box_size, activeTint, activeBaseStrength, activeRadius);
     } else {
         // The actor can be much larger than the glass (a monitor-sized
         // capture), so the shape comes from dock_*, not from the resolution.
@@ -611,7 +621,7 @@ void main() {
         activeTint = vec3(tint_r, tint_g, tint_b);
     }
 
-    vec2 corner = cornerShape(box_size, corner_radius);
+    vec2 corner = cornerShape(box_size, activeRadius);
     float d = sdRoundRect(local_pos, box_size, corner);
 
     float lensBand = lensBandFor(min(box_size.x, box_size.y));

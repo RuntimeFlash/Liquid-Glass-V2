@@ -16,6 +16,9 @@ export interface GlassRegion {
   x: number; y: number; w: number; h: number;
   tintR: number; tintG: number; tintB: number;
   baseStrength?: number;
+  // Corner radius for this region; 0 (the default) uses the glass's own
+  // corner_radius. Lets one glass mix circles, pills and rounded rectangles.
+  radius?: number;
 }
 
 /**
@@ -268,6 +271,7 @@ export class GlassRenderer {
     const rTintG = new Array(MAX_GLASS_REGIONS).fill(1.0);
     const rTintB = new Array(MAX_GLASS_REGIONS).fill(1.0);
     const rBaseStrength = new Array(MAX_GLASS_REGIONS).fill(0.0);
+    const rRadius = new Array(MAX_GLASS_REGIONS).fill(0.0);
 
     clamped.forEach((region, i) => {
       rx[i] = region.x;
@@ -278,6 +282,7 @@ export class GlassRenderer {
       rTintG[i] = region.tintG;
       rTintB[i] = region.tintB;
       rBaseStrength[i] = Math.max(0.0, Math.min(1.0, region.baseStrength ?? 0.0));
+      rRadius[i] = Math.max(0.0, region.radius ?? 0.0);
     });
 
     this.geometry.regions = clamped.map(r => [r.x, r.y, r.w, r.h]);
@@ -291,6 +296,7 @@ export class GlassRenderer {
     this.uniforms.setArray('region_tint_g', rTintG);
     this.uniforms.setArray('region_tint_b', rTintB);
     this.uniforms.setArray('region_base_strength', rBaseStrength);
+    this.uniforms.setArray('region_radius', rRadius);
     this._repaintIfDirty();
   }
 

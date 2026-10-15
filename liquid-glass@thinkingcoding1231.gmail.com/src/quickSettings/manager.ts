@@ -1,21 +1,20 @@
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
-import Shell from 'gi://Shell';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Pango from 'gi://Pango';
-import { LiquidEffect } from './liquidEffect.js';
 import { markOpenTrigger, timed } from '../diagnostics/openLag.js';
-import { BackdropBlurEffect } from './backdropBlur.js';
 import { StageContrastSampler, AdaptiveContrastConfig } from './qsContrastSampler.js';
 import Gio from 'gi://Gio';
-import { UnpickableClone, UnpickableActor, suppressGnomePopupAnimation, hasStyleClass, hexToRgb,
-  createBackdropClone, syncBackdropClone } from './qsUtils.js';
+import { suppressGnomePopupAnimation, hasStyleClass, hexToRgb } from './qsUtils.js';
 import { CustomSubmenuRenderer } from './customSubmenu.js';
 import { CustomQuickSettingsRenderer } from './customQuickSettings.js';
 import { QuickSettingsStampAnimation } from './quickSettingsAnimation.js';
 import { isActorValid } from '../actors/lifecycle.js';
+import { BackdropGlass } from '../rendering/backdropGlass.js';
+import type { GlassRegion } from '../rendering/glassRenderer.js';
+import { hexToColorArray } from '../animation/colors.js';
 import { Logger } from '../logger.js';
 
 
@@ -26,60 +25,13 @@ import { Logger } from '../logger.js';
 const SHADER_PADDING = 20;
 const ENABLE_QS_CARD_SHADER = true;
 const QS_CARD_SHADER_PADDING = 20;
-
-// Whole-menu backdrop blur parameters. The Shell.BlurEffect provides the pure
-// blur (radius comes from the quick-settings-blur-radius setting, shared with
-// the card glass so the whole menu frosts evenly); the BackdropBlurEffect mask
-// rounds the corners and feathers the edges so no hard rectangle is visible.
-// PADDING is the horizontal/bottom padding around the menu (full-frost margin
-// of 2px plus the 60px outward feather = 62px). The top padding is 0 so the
-// blur never extends above the menu into the top panel; the shader keeps the
-// mask flush with the overlay top and only fades the left/right/bottom edges.
-const QS_BLUR_OVERLAY_PADDING = 62;
-const QS_BLUR_OVERLAY_CORNER_RADIUS = 24;
-const QS_BLUR_OVERLAY_FEATHER = 60;
-
-// How much of the backdrop blur runs at reduced resolution. 2 aims for half the
-// linear resolution, i.e. a quarter of the pixels, in the blur's offscreen
-// buffer.
-//
-// Shell.BlurEffect allocates that buffer at exactly the actor's allocation
-// (update_actor_box / update_framebuffer in shell-blur-effect.c), and Shell's
-// own adaptive downscale only starts reducing it above radius 12 -- so at the
-// radii this extension ships with (default 3) the backdrop buffer is always
-// allocated and re-blurred at full menu size. Rendering the blur into a
-// smaller container and scaling that container back up gives the same buffer
-// reduction for any radius.
-//
-// Only the blur is reduced. The result is composited into the menu-sized clip
-// box and the feathered corner mask is chained on top of that, so the final
-// pass and the mask stay full resolution and the mask corners stay per-pixel
-// accurate. The blur itself is low frequency, so the loss is not visible.
-//
-// The radius has to come down by the same factor: ShellBlurEffect reports the
-// on-screen blur as radius * (screen size / allocation), so a container
-// allocated at size/k needs radius/k. k is derived from the radius rather than
-// fixed at 2 so that stays exact for odd radii -- the radius property is an int,
-// so base 3 becomes radius 2 at k 1.5, which still reads as a 3px blur, whereas
-// forcing k 2 would round the radius up to 2 and visibly soften the backdrop.
-const QS_BLUR_FBO_DIVISOR = 2;
+// Fallback corner radius for the whole-grid glass when the setting is unset.
+const QS_DEFAULT_CORNER_RADIUS = 18;
 
 // Drives the verbose [LG-*] animation tracing. Off by default: the template
 // literals below were built on every open/close stop regardless of whether
 // anything consumes the output.
 const LG_DEBUG_ANIM = false;
-
-// Halving every blur radius for the length of a transition was the old way to
-// stay inside the frame budget. Shell's blur effect reallocates its offscreen
-// buffer whenever the radius changes, so that halved and then restored the
-// buffer of every card and of the overlay twice per open -- the FBO churn that
-// makes the first frame of an open stall -- and it also sharpened the frost
-// until the menu settled. Off: turn on to compare.
-const REDUCE_BLUR_DURING_TRANSITION = false;
-
-// Assumed frame length when converting the millisecond "Animation Interval"
-// setting into a number of frames between window-clone rebuilds.
-const QS_ASSUMED_FRAME_MS = 16.667;
 
 // Submenu → QS return entrance: fade + subtle rise, crossfaded with the
 // submenu shrink. No scale is animated (backings can never drift from
@@ -87,16 +39,9 @@ const QS_ASSUMED_FRAME_MS = 16.667;
 const QS_RETURN_DURATION_MS = 160;
 const QS_RETURN_RISE_PX = 8;
 
-// Two integer points plus an integer extent, normalised to top-left origin.
-// Module-level scratch: the sync path used to allocate an array (from
-// get_transformed_position), several objects and a Clutter.Point per card per
-// frame.
-interface Rect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
+// Assumed frame length when converting a duration or the "Animation Interval"
+// setting into a number of frames.
+const QS_ASSUMED_FRAME_MS = 16.667;
 
 // The affine map from a parent actor's local space to the stage, measured by
 // probing the origin and the two unit basis vectors. `identity` means the map
@@ -110,10 +55,6 @@ interface AffineProjection {
   xy: number;
   yx: number;
   yy: number;
-}
-
-function rectsIntersect(a: Rect, b: Rect) {
-  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
 // How much larger the glass background should be compared to the actual menu UI.
@@ -148,11 +89,13 @@ export class QuickSettingsManager {
   private _buttonSignalIds: Map<Clutter.Actor, number[]>;
   private _drilldownSignalIds: Map<Clutter.Actor, { target: any, id: number }[]>;
   private _cardActors: Set<Clutter.Actor>;
-  private _cardBackings: Map<Clutter.Actor, St.Widget>;
+  // The one glass every card is drawn into. Same architecture as the calendar
+  // menu and the top bar's island style: a BackdropGlass that copies its own
+  // backdrop, blurs it once and composites all the card regions in a single
+  // pass. Replaces the per-card Shell.BlurEffect + LiquidEffect stack.
+  private _glass: BackdropGlass | null = null;
   private _cardBackingSyncId: number;
   private _cardBackingLastSignature: string;
-  // The window set the card clones were last rebuilt for; see _syncCardBackings.
-  private _cardCloneSig: string;
   private _cardBackingStableFrames: number;
   private _cardBackingIdleMode: boolean;
   private _hiddenMenuParts: Map<any, {
@@ -239,46 +182,10 @@ export class QuickSettingsManager {
   // scaling menu.actor pivots around stage (0,0). Scaling the boxpointer gives
   // real geometry and a real pivot.
   private _stampActor: St.Widget | null = null;
-  // ---- Frosted backdrop ownership --------------------------------------
-  // The frosted sheet is Quick Settings' own. It is measured from the popup's
-  // settled rect; the floating submenu no longer borrows it (it carries its own
-  // glass stack again), so there is no borrower state here.
-  //
-  // Fullscreen background blur overlay that fades in/out with the QS menu animation
-  private _qsBlurOverlay: St.Widget | null = null;
-  private _qsBlurOverlayEffect: Shell.BlurEffect | null = null;
-  // Feathered rounded-corner mask chained after _qsBlurOverlayEffect so the
-  // blur blends smoothly into the desktop instead of a hard rectangle.
-  private _qsBlurMask: BackdropBlurEffect | null = null;
-  // Clone-based blur pipeline for the overlay (mirrors the card backings):
-  // clipBox -> fboContainer with an ACTOR-mode blur + desktop/window clones.
-  private _qsBlurClipBox: St.Widget | null = null;
-  private _qsBlurFboContainer: Clutter.Actor | null = null;
-  // Counter-scale box inside _qsBlurFboContainer: everything below it is drawn
-  // at 1/k so the whole menu-sized source fits the k-times-smaller blur buffer.
-  private _qsBlurHalfBox: Clutter.Actor | null = null;
-  private _qsBlurBgClone: Clutter.Actor | null = null;
-  private _qsBlurWindowClonesContainer: Clutter.Actor | null = null;
-  private _qsBlurWindowClones: Map<Clutter.Actor, Clutter.Clone> = new Map();
-  // Window-set token the overlay's clones were last built from. ClutterClone
-  // keeps painting a source that has been unmapped (clutter_clone_paint turns on
-  // enable-paint-unmapped for sources that are not mapped), so a clone of a
-  // window that left the active workspace goes on rendering that window. The
-  // overlay's clone set therefore has to follow the *visible* window set, and
-  // this token is how the sync knows it must rebuild instead of just moving.
-  private _qsBlurCloneSig: string = '';
-  // Effective backdrop blur radius before the FBO downscale is applied to it
-  // (-1 = not read from the settings yet), and the derived pair actually pushed
-  // onto the overlay (see _blurDownscaleFor).
-  private _overlayBlurBase: number = -1;
-  private _blurFboScale: number = 1;
-  private _blurFboRadius: number = 0;
-
   // ---- Animation-path scratch state -------------------------------------
   // Reused across ticks instead of reallocated: a single Clutter.Point for
-  // matrix transforms, and the per-card rect scratch used to cull window clones.
+  // matrix transforms.
   private _scratchPoint: any = null;
-  private _cardRectsScratch: Rect[] = [];
   // Pending "lazy widget" clip sweep (see _scheduleLateClipSweep).
   private _clipSweepPendingId: number = 0;
   // Card count captured when the menu opened, so the late sweep can tell
@@ -297,14 +204,6 @@ export class QuickSettingsManager {
   // sync instead of each running a full _syncCardBackings synchronously.
   private _cardSyncCoalescedPending: boolean = false;
   private _cardEffectsCoalescedPending: boolean = false;
-  // Reduced-blur state during transitions: halves ACTOR blur radii while the
-  // menu fades so large FBO re-blurs stay in frame budget under load.
-  private _transitionBlurReduced: boolean = false;
-  private _savedOverlayBlurRadius: number = -1;
-  // Cached HiDPI scale so _syncBlurOverlayGeometry doesn't hit ThemeContext
-  // (a GI round-trip) on every animation tick.
-  private _cachedThemeScale: number = 1;
-  private _cachedThemeScaleUs: number = 0;
 
 
   constructor(extensionPath: string, settings: Gio.Settings, logger: Logger) {
@@ -349,10 +248,8 @@ export class QuickSettingsManager {
     this._buttonSignalIds = new Map();
     this._drilldownSignalIds = new Map();
     this._cardActors = new Set();
-    this._cardBackings = new Map();
     this._cardBackingSyncId = 0;
     this._cardBackingLastSignature = '';
-    this._cardCloneSig = '';
     this._cardBackingStableFrames = 0;
     this._cardBackingIdleMode = false;
     this._hiddenMenuParts = new Map();
@@ -410,15 +307,6 @@ export class QuickSettingsManager {
     if (this._settings.get_boolean('enable-quick-settings-glass')) {
       this._applyEffect();
     }
-  }
-
-  // Utility: Convert HEX color string to normalized RGB array
-  _hexToColorArray(hex: string): [number, number, number] {
-    if (!hex || typeof hex !== 'string' || !hex.startsWith('#') || hex.length !== 7) return [1.0, 1.0, 1.0];
-    let r = parseInt(hex.slice(1, 3), 16) / 255.0;
-    let g = parseInt(hex.slice(3, 5), 16) / 255.0;
-    let b = parseInt(hex.slice(5, 7), 16) / 255.0;
-    return [r, g, b];
   }
 
   _getMenuMonitorGeometry() {
@@ -479,37 +367,20 @@ export class QuickSettingsManager {
     });
 
     connectSetting('quick-settings-tint-color', () => {
-      // The menu-level glass is gone; the per-card effects read the tint
-      // setting directly on their next sync.
+      this._glass?.setTintColor(...hexToColorArray(this._settings.get_string('quick-settings-tint-color')));
     });
 
     connectSetting('quick-settings-tint-strength', () => {
-      let tintStrength = this._settings.get_double('quick-settings-tint-strength');
-      this._cardBackings.forEach((backing) => {
-        if (backing && (backing as any)._liquidGlassCardEffect) {
-          (backing as any)._liquidGlassCardEffect.setTintStrength(tintStrength);
-        }
-      });
+      this._glass?.setTintStrength(this._settings.get_double('quick-settings-tint-strength'));
     });
 
     connectSetting('quick-settings-blur-radius', () => {
-      let blurRadius = this._settings.get_int('quick-settings-blur-radius');
-      if (!this._transitionBlurReduced) {
-        this._overlayBlurBase = blurRadius;
-        this._applyOverlayBlurRadius();
-      }
-      this._cardBackings.forEach((backing) => {
-        if (backing && (backing as any)._liquidGlassCardBlur) {
-          (backing as any)._liquidGlassCardBlur.radius = blurRadius;
-        }
-      });
+      this._glass?.setBlurRadius(this._settings.get_int('quick-settings-blur-radius'));
     });
 
     connectSetting('quick-settings-corner-radius', () => {
       this._cornerRadius = this._settings.get_double('quick-settings-corner-radius');
-      if (this._qsBlurMask) {
-        this._qsBlurMask.setCornerRadius(this._cornerRadius || QS_BLUR_OVERLAY_CORNER_RADIUS);
-      }
+      this._glass?.setCornerRadius(this._cornerRadius || QS_DEFAULT_CORNER_RADIUS);
     });
 
     connectSetting('quick-settings-glass-expand', () => {
@@ -662,103 +533,53 @@ export class QuickSettingsManager {
     }
   }
 
-  _getOrCreateCardBacking(card: Clutter.Actor): St.Widget | null {
-    let backing = this._cardBackings.get(card);
-    if (backing && backing.get_parent()) return backing;
+  // The one glass the whole grid is drawn into, created lazily and inserted
+  // directly below the popup so it reads the stage before the menu paints.
+  _getOrCreateGlass(): BackdropGlass | null {
+    let glass = this._glass;
+    if (glass && isActorValid(glass)) return glass;
 
     let parent = this.menu?.actor?.get_parent?.() || Main.layoutManager.uiGroup;
     if (!parent) return null;
 
-    backing = new St.Widget({
-      style_class: 'liquid-glass-card-backing',
-      reactive: false,
-      clip_to_allocation: false,
-    });
-    backing.set_size(2, 2);
-    backing.opacity = 0;
-    backing.hide();
-
-    if (!ENABLE_QS_CARD_SHADER) try {
-      let blurRadius = this._settings.get_int('quick-settings-blur-radius');
-      let blur = new Shell.BlurEffect({ radius: blurRadius, mode: Shell.BlurMode.BACKGROUND });
-      backing.add_effect_with_name('liquid-glass-card-blur', blur);
-      (backing as any)._liquidGlassCardBlur = blur;
-    } catch (e) {}
-
-    if (ENABLE_QS_CARD_SHADER) try {
-      let clipBox = new St.Widget({ clip_to_allocation: true, reactive: false });
-      clipBox.set_size(2, 2);
-      backing.add_child(clipBox);
-
-      let fboContainer = new UnpickableActor();
-      fboContainer.set_size(2, 2);
-      clipBox.add_child(fboContainer);
-
-      let bgClone = createBackdropClone();
-      fboContainer.add_child(bgClone);
-
-      let windowClonesContainer = new UnpickableActor();
-      fboContainer.add_child(windowClonesContainer);
-
-      let blurRadius = this._settings.get_int('quick-settings-blur-radius');
-      let blur = new Shell.BlurEffect({ radius: blurRadius, mode: Shell.BlurMode.ACTOR });
-      fboContainer.add_effect(blur);
-
-      (backing as any)._liquidGlassClipBox = clipBox;
-      (backing as any)._liquidGlassFboContainer = fboContainer;
-      (backing as any)._liquidGlassBgClone = bgClone;
-      (backing as any)._liquidGlassWindowClonesContainer = windowClonesContainer;
-      (backing as any)._liquidGlassWindowClones = new Map();
-      (backing as any)._liquidGlassCardBlur = blur;
-    } catch (e) {}
-
-    if (ENABLE_QS_CARD_SHADER) try {
-      let liquid = new LiquidEffect({ extensionPath: this.extensionPath, settings: this._settings } as any);
-      liquid.setPadding(QS_CARD_SHADER_PADDING);
-      liquid.setTintColor(1.0, 1.0, 1.0);
-      let tintStrength = this._settings.get_double('quick-settings-tint-strength');
-      liquid.setTintStrength(tintStrength);
-      liquid.setIsDock(false);
-      backing.add_effect_with_name('liquid-glass-card-backing-effect', liquid);
-      (backing as any)._liquidGlassCardEffect = liquid;
-    } catch (e) {}
+    glass = new BackdropGlass({
+      extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'quick-settings',
+    } as any) as BackdropGlass;
+    glass.setPadding(SHADER_PADDING);
+    glass.setIsDock(false);
+    glass.setMultiRegionMode(true);
+    glass.setTintColor(...hexToColorArray(this._settings.get_string('quick-settings-tint-color')));
+    glass.setTintStrength(this._settings.get_double('quick-settings-tint-strength'));
+    glass.setBlurRadius(this._settings.get_int('quick-settings-blur-radius'));
+    glass.setCornerRadius(this._cornerRadius || QS_DEFAULT_CORNER_RADIUS);
+    glass.set_size(2, 2);
+    glass.opacity = 0;
+    glass.hide();
 
     try {
-      parent.insert_child_below(backing, this.menu.actor);
+      parent.insert_child_below(glass, this.menu.actor);
     } catch (e) {
-      try { parent.add_child(backing); } catch (e2) {}
+      try { parent.add_child(glass); } catch (e2) {}
     }
 
-    backing.connect('destroy', () => {
-      this._cardBackings.delete(card);
-    });
-
-    this._cardBackings.set(card, backing);
-    return backing;
+    this._glass = glass;
+    return glass;
   }
 
+  // No per-card actor exists any more (one multi-region glass draws them all),
+  // so this only drops the card's cached geometry hints.
   _removeCardBacking(card: Clutter.Actor) {
-    let backing = this._cardBackings.get(card);
-    if (!backing) return;
-
-    try {
-      let effect = backing.get_effect('liquid-glass-card-backing-effect') as any;
-      if (effect && typeof effect.cleanup === 'function') effect.cleanup();
-    } catch (e) {}
-
-    try { backing.destroy(); } catch (e) {}
-    this._cardBackings.delete(card);
     this._cardLastGoodRect.delete(card);
     this._cardBackingSnapshots.delete(card);
   }
 
   _setCardBackingsOpacity(opacity: number) {
-    for (let backing of this._cardBackings.values()) {
-      try {
-        backing.opacity = opacity;
-        if (opacity <= 0) backing.hide();
-      } catch (e) {}
-    }
+    const glass = this._glass;
+    if (!glass) return;
+    try {
+      glass.opacity = opacity;
+      if (opacity <= 0) glass.hide();
+    } catch (e) {}
   }
 
   // Projects a parent-local origin onto the stage once per sync and caches it.
@@ -845,17 +666,6 @@ export class QuickSettingsManager {
     return projection;
   }
 
-  // Converts the "Animation Interval (ms)" setting into a rebuild cadence in
-  // frames. Clamped to at least one frame so the setting can never disable the
-  // rebuild outright, and capped so a huge value cannot stall the fade's
-  // content refresh for its whole duration.
-  _framesPerCloneRebuild() {
-    let intervalMs = this._animationInterval;
-    if (!Number.isFinite(intervalMs) || intervalMs <= 0) return 1;
-    let frames = Math.round(intervalMs / QS_ASSUMED_FRAME_MS);
-    return Math.max(1, Math.min(30, frames));
-  }
-
   // Single BEFORE_REDRAW/idle hook shared by all deferred card work. Queuing
   // through the compositor keeps heavy sync off the synchronous open path so
   // the first frame can paint before backings/clones are built.
@@ -897,310 +707,91 @@ export class QuickSettingsManager {
     });
   }
 
-  // ---------------------------------------------------------------------
-  // Backdrop blur resolution
-  // ---------------------------------------------------------------------
-
-  // The blur radius the overlay would use if it were rendered at full size.
-  // This is the configured value, not the transition-reduced one: transitions
-  // trim the texel radius on top of the downscale (see
-  // _applyOverlayBlurRadius) instead of moving the base.
-  _overlayBlurRadiusBase(): number {
-    if (this._overlayBlurBase < 0)
-      this._overlayBlurBase = this._settings.get_int('quick-settings-blur-radius');
-    return this._overlayBlurBase;
+  // Call-site stable wrapper. The per-card and overlay clone rebuild arguments
+  // are gone: one multi-region glass owns the whole grid's backdrop now, so
+  // every sync just rebuilds the region list and re-captures the stage.
+  _syncCardBackings(_skipWindowClones = false, _rebuildWindowClones = true, _frameWindowActors: any[] | null = null,
+    _forceCloneRebuild = false) {
+    return timed('cardBackings', () => this._syncCardBackingsImpl());
   }
 
-  // Splits a requested backdrop blur radius into the reduced-resolution radius
-  // to hand to Shell.BlurEffect plus the actor scale that puts it back to the
-  // requested size on screen. See QS_BLUR_FBO_DIVISOR: ShellBlurEffect reports
-  // the on-screen blur as radius * (screen size / allocation), so scaling the
-  // allocation down by k and the actor up by k needs radius/k, and deriving k
-  // from the radius keeps that exact when radius/k would not be an integer.
-  _blurDownscaleFor(baseRadius: number): { scale: number, radius: number } {
-    let base = Math.round(baseRadius) || 0;
-    // Radius 1 is the smallest value the int property can hold, so there is
-    // nothing left to divide and the buffer has to stay full size.
-    if (base <= 1) return { scale: 1, radius: Math.max(0, base) };
-    let radius = Math.max(1, Math.round(base / QS_BLUR_FBO_DIVISOR));
-    return { scale: base / radius, radius };
-  }
-
-  // Pushes the current radius / downscale factor onto the overlay. Called from
-  // the overlay build and from every path that changes the radius (the setting
-  // and the transition-reduced toggle).
-  _applyOverlayBlurRadius() {
-    let { scale, radius } = this._blurDownscaleFor(this._overlayBlurRadiusBase());
-    // A running transition halves the blur, but it must not undo the downscale:
-    // the offscreen buffer is what costs, its size does not shrink with the
-    // radius, and the transition is precisely when the frame budget is
-    // tightest. Trimming the texel radius keeps the reduced buffer in place and
-    // the on-screen blur simply halves with it.
-    if (this._transitionBlurReduced) {
-      if (radius > 1) radius = Math.max(1, Math.floor(radius / 2));
-    }
-    this._blurFboScale = scale > 0 ? scale : 1;
-    this._blurFboRadius = radius;
-    try {
-      if (this._qsBlurOverlayEffect) this._qsBlurOverlayEffect.radius = radius;
-      if (this._qsBlurHalfBox) {
-        this._qsBlurHalfBox.set_pivot_point(0, 0);
-        let inverse = 1 / this._blurFboScale;
-        this._qsBlurHalfBox.set_scale(inverse, inverse);
-      }
-    } catch (e) {}
-    // Invalidate the memoized container geometry so the next sync re-applies
-    // the size and scale for the new factor instead of skipping them.
-    let geometry = this._qsBlurOverlay && (this._qsBlurOverlay as any)._liquidGlassGeometry;
-    if (geometry) {
-      geometry.fboW = -1;
-      geometry.fboH = -1;
-      geometry.fboScale = -1;
-    }
-  }
-
-  // Halves ACTOR blur radii while a transition runs; restores afterwards.
-  // Large-radius ACTOR blurs dominate the per-frame FBO cost, so this is the
-  // cheapest way to stay in frame budget under CPU/GPU pressure.
-  _setTransitionBlurReduced(reduced: boolean) {
-    if (this._transitionBlurReduced === reduced) return;
-    this._transitionBlurReduced = reduced;
-    try {
-      let base = this._savedOverlayBlurRadius > 0
-        ? this._savedOverlayBlurRadius
-        : this._settings.get_int('quick-settings-blur-radius');
-      let half = Math.max(1, Math.floor(base / 2));
-      if (reduced) {
-        this._savedOverlayBlurRadius = base;
-        this._overlayBlurBase = base;
-        this._applyOverlayBlurRadius();
-        for (let backing of this._cardBackings.values()) {
-          let blur = (backing as any)._liquidGlassCardBlur;
-          if (blur) { (backing as any)._liquidSavedBlurRadius = blur.radius ?? base; blur.radius = half; }
-        }
-      } else {
-        this._overlayBlurBase = base;
-        this._applyOverlayBlurRadius();
-        for (let backing of this._cardBackings.values()) {
-          let blur = (backing as any)._liquidGlassCardBlur;
-          if (blur) blur.radius = (backing as any)._liquidSavedBlurRadius ?? base;
-        }
-        this._savedOverlayBlurRadius = -1;
-      }
-    } catch (e) {}
-  }
-
-  // Cached ThemeContext scale (500ms TTL) to avoid a GI round-trip per tick.
-  _themeScaleFactor(): number {
-    let now = GLib.get_monotonic_time();
-    if (now - this._cachedThemeScaleUs < 500_000 && this._cachedThemeScale > 0)
-      return this._cachedThemeScale;
-    let scale = 1;
-    try {
-      let themeContext = St.ThemeContext.get_for_stage(global.stage);
-      scale = themeContext.scale_factor ?? 1;
-    } catch (e) {}
-    if (!(scale > 0)) scale = 1;
-    this._cachedThemeScale = scale;
-    this._cachedThemeScaleUs = now;
-    return scale;
-  }
-
-  _getWindowActorsSignature(windowActors: any[]) {
-    let parts: string[] = [];
-    try {
-      for (let windowActor of windowActors) {
-        let metaWindow = windowActor.get_meta_window?.();
-        if (!metaWindow || metaWindow.minimized || !windowActor.visible)
-          continue;
-        parts.push([
-          Math.round(windowActor.x),
-          Math.round(windowActor.y),
-          Math.round(windowActor.width),
-          Math.round(windowActor.height),
-        ].join(','));
-      }
-    } catch (e) {}
-    return parts.join('|');
-  }
-
-  // True when a clone container's children are not already in the order the
-  // windows are stacked in.
-  //
-  // Clone order is paint order: the container draws its children in list order,
-  // and mutter keeps global.get_window_actors() in stacking order. Re-indexing
-  // only when the clone *set* changed meant a restack never moved anything, so
-  // whichever window was topmost when the clones were first built stayed on top
-  // of the glass no matter what the user raised over it. Comparing the desired
-  // order against the live children is O(n) and only pays for
-  // set_child_at_index when the stack actually moved.
-  _cloneOrderChanged(
-    container: Clutter.Actor,
-    order: Iterable<Clutter.Actor>,
-    cloneMap: Map<Clutter.Actor, Clutter.Clone>
-  ): boolean {
-    let children = container.get_children();
-    let i = 0;
-    for (let windowActor of order) {
-      if (children[i] !== cloneMap.get(windowActor)) return true;
-      i++;
-    }
-    return i !== children.length;
-  }
-
-  _syncBackingWindowClones(backing: St.Widget, stageX: number, stageY: number, windowActors: any[], rebuildChildren = true, clipRect: Rect | null = null) {
-    let container = (backing as any)._liquidGlassWindowClonesContainer as Clutter.Actor | undefined;
-    let cloneMap = (backing as any)._liquidGlassWindowClones as Map<Clutter.Actor, Clutter.Clone> | undefined;
-    if (!container || !cloneMap) return;
-
-    try {
-      // Container geometry is cheap and always current, so the move-only path
-      // (rebuildChildren === false) stays correct: every clone child shifts
-      // with the container.
-      let state = (backing as any)._liquidGlassWindowCloneState || {};
-      let containerX = -stageX;
-      let containerY = -stageY;
-      if (state.x !== containerX || state.y !== containerY)
-        container.set_position(containerX, containerY);
-      if (state.scale !== 1.0)
-        container.set_scale(1.0, 1.0);
-      state.x = containerX;
-      state.y = containerY;
-      state.scale = 1.0;
-      (backing as any)._liquidGlassWindowCloneState = state;
-
-      if (!rebuildChildren) {
-        // Cheap path: leave the clone children untouched. The caller has
-        // already established that the visible window set is unchanged.
-        return;
-      }
-
-      let activeWindows = new Set<Clutter.Actor>();
-      let zOrderDirty = false;
-      for (let windowActor of windowActors) {
-        let metaWindow = windowActor.get_meta_window?.();
-        if (!metaWindow || metaWindow.minimized || !windowActor.visible)
-          continue;
-
-        // Only clone windows that actually overlap this backing. The caller
-        // passes null when the backings' parent is not projecting identity onto
-        // the stage, because the card rect and the window rects would then be in
-        // different coordinate spaces and the comparison unsound.
-        if (clipRect) {
-          let windowRect = {
-            x: windowActor.x + windowActor.translation_x,
-            y: windowActor.y + windowActor.translation_y,
-            w: windowActor.width * windowActor.scale_x,
-            h: windowActor.height * windowActor.scale_y,
-          };
-          if (!rectsIntersect(windowRect, clipRect))
-            continue;
-        }
-
-        activeWindows.add(windowActor);
-        let clone = cloneMap.get(windowActor);
-        if (!clone) {
-          clone = new UnpickableClone({ source: windowActor });
-          container.add_child(clone);
-          cloneMap.set(windowActor, clone);
-          zOrderDirty = true;
-        }
-
-        clone.set_position(windowActor.x, windowActor.y);
-        clone.set_size(windowActor.width, windowActor.height);
-        clone.set_scale(windowActor.scale_x, windowActor.scale_y);
-        clone.translation_x = windowActor.translation_x;
-        clone.translation_y = windowActor.translation_y;
-      }
-
-      for (let [windowActor, clone] of Array.from(cloneMap.entries())) {
-        if (!activeWindows.has(windowActor)) {
-          try { clone.destroy(); } catch (e) {}
-          cloneMap.delete(windowActor);
-          zOrderDirty = true;
-        }
-      }
-
-      // z-order is re-indexed when the clone set changed *or* when the stack
-      // order did; doing it unconditionally dirties the paint order and forces a
-      // relayout on every rebuild.
-      if (zOrderDirty || this._cloneOrderChanged(container, activeWindows, cloneMap)) {
-        let index = 0;
-        for (let windowActor of activeWindows) {
-          let clone = cloneMap.get(windowActor);
-          if (!clone) continue;
-          try { container.set_child_at_index(clone, index); } catch (e) {}
-          index++;
-        }
-      }
-    } catch (e) {}
-  }
-
-  // `skipWindowClones` suppresses the per-card clone rebuild outright (used by
-  // callers that only need backing geometry). `rebuildWindowClones` controls the
-  // tick-throttled case: children are left in place and only the container is
-  // moved. `frameWindowActors` lets the animation tick reuse one snapshot of
-  // global.get_window_actors() instead of re-fetching it per sync.
-  _syncCardBackings(skipWindowClones = false, rebuildWindowClones = !skipWindowClones, frameWindowActors: any[] | null = null,
-    forceCloneRebuild = false) {
-    return timed('cardBackings', () =>
-      this._syncCardBackingsImpl(skipWindowClones, rebuildWindowClones, frameWindowActors, forceCloneRebuild));
-  }
-
-  _syncCardBackingsImpl(skipWindowClones = false, rebuildWindowClones = !skipWindowClones, frameWindowActors: any[] | null = null,
-    forceCloneRebuild = false) {
+  // Builds this frame's card regions and hands them to the one glass. Each card
+  // keeps its own rounded-rect region (with its own corner radius and tint), so
+  // the grid still reads as separate buttons; the capture, the blur and the
+  // shader pass are shared, the same architecture as the calendar menu's single
+  // sheet and the top bar's island style.
+  _syncCardBackingsImpl() {
     if (!this.menu?.actor?.mapped && !this._isAnimating) return;
 
-    let windowActors = frameWindowActors ?? global.get_window_actors();
-    // A rebuild walks every window for every card and rewrites the clones'
-    // geometry, which forces a relayout for each one; the opening frames woke
-    // this dozens of times over (allocation bursts, clip sweeps, setting
-    // changes), and that burst was most of the open's CPU. The window-set
-    // token says whether a rebuild could change anything at all.
-    // The token records the window set the clones were last *built* for, not
-    // the last one merely seen: a move-only sync (the open frame) leaves a real
-    // set change pending so the next sync allowed to rebuild picks it up,
-    // instead of swallowing the change and leaving the clones stale.
-    const windowSig = this._backdropWindowSignature();
-    const windowSetChanged = forceCloneRebuild || windowSig !== this._cardCloneSig;
-    let parent = this.menu?.actor?.get_parent?.() || Main.layoutManager.uiGroup;
-    // Recomputed once per sync. Acting as the tick's frame token, it also
-    // thins the style-class work below to real animation frames.
+    const parent = this.menu?.actor?.get_parent?.() || Main.layoutManager.uiGroup;
+    if (!parent) return;
+    const glass = this._getOrCreateGlass();
+    if (!glass) return;
+
+    try {
+      if (glass.get_parent() !== parent) {
+        glass.get_parent()?.remove_child(glass);
+        if (this.menu?.actor && parent.contains(this.menu.actor))
+          parent.insert_child_below(glass, this.menu.actor);
+        else
+          parent.add_child(glass);
+      }
+    } catch (e) {}
+
+    // Recomputed once per sync; this doubles as the tick's frame token.
     this._originProjection = null;
-    let projection = this._getOriginProjection(parent);
-    let projectionIsIdentity = projection.identity;
-    let rects = this._cardRectsScratch;
-    let rectCount = 0;
-    for (let card of Array.from(this._cardActors)) {
-      let stCard = card as any;
+    const projection = this._getOriginProjection(parent);
+    const projectionIsIdentity = projection.identity;
 
-      let backing = this._getOrCreateCardBacking(card);
-      if (!backing) continue;
+    const regions: GlassRegion[] = [];
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let opacity = 255;
+    let visibleCount = 0;
+    const pad = QS_CARD_SHADER_PADDING;
 
-      try {
-        if (backing.get_parent() !== parent) {
-          backing.get_parent()?.remove_child(backing);
-          parent.insert_child_below(backing, this.menu.actor);
-        }
-      } catch (e) {}
+    const pushRegion = (x: number, y: number, w: number, h: number, stCard: any) => {
+      const isCircle = !!stCard.has_style_class_name?.('liquid-glass-card-circle');
+      const isSquircle = !!stCard.has_style_class_name?.('liquid-glass-card-squircle');
+      const isPill = !!stCard.has_style_class_name?.('liquid-glass-card-pill');
+      let radius: number;
+      if (isCircle || isPill) radius = Math.min(w, h) / 2;
+      else if (isSquircle) radius = Math.round(Math.min(w, h) * 0.46);
+      else radius = this._cornerRadius || QS_DEFAULT_CORNER_RADIUS;
 
+      let isChecked = false;
+      try { if (stCard.checked === true) isChecked = true; } catch (e) {}
+      try { if (stCard.has_style_pseudo_class?.('checked')) isChecked = true; } catch (e) {}
+      try { if (stCard.has_style_class_name?.('checked')) isChecked = true; } catch (e) {}
+
+      // GNOME Blue while checked, the global tint otherwise (baseStrength 0).
+      const tintR = isChecked ? 53 / 255 : 1.0;
+      const tintG = isChecked ? 132 / 255 : 1.0;
+      const tintB = isChecked ? 228 / 255 : 1.0;
+      const baseStrength = isChecked ? 0.35 : 0.0;
+
+      // The region rect includes the shader's `padding`; the shader insets it
+      // back out to get the body (see glass.frag / GlassGeometry).
+      const rx = x - pad;
+      const ry = y - pad;
+      const rw = w + pad * 2;
+      const rh = h + pad * 2;
+      regions.push({ x: rx, y: ry, w: rw, h: rh, tintR, tintG, tintB, baseStrength, radius });
+      if (rx < minX) minX = rx;
+      if (ry < minY) minY = ry;
+      if (rx + rw > maxX) maxX = rx + rw;
+      if (ry + rh > maxY) maxY = ry + rh;
+      visibleCount++;
+    };
+
+    for (const card of Array.from(this._cardActors)) {
+      const stCard = card as any;
       try {
         let [x, y] = card.get_transformed_position();
         let [w, h] = card.get_size();
 
-        // Frozen geometry is for a *hidden, static* menu only (the submenu
-        // hand-off). While the stamp is running the glass must be measured live
-        // on every frame: pinning it to a captured rect is what left the icons
-        // sitting outside their liquid glass until the animation ended.
-        let snapshot = (this._cardBackingsFrozen && !this._isAnimating)
-          ? this._cardBackingSnapshots.get(card)
-          : null;
-        if (snapshot) {
-          x = snapshot.x;
-          y = snapshot.y;
-          w = snapshot.w;
-          h = snapshot.h;
-        }
+        const snapshot = (this._cardBackingsFrozen && !this._isAnimating)
+          ? this._cardBackingSnapshots.get(card) : null;
+        if (snapshot) { x = snapshot.x; y = snapshot.y; w = snapshot.w; h = snapshot.h; }
 
         if (
           !card.visible || !card.mapped ||
@@ -1209,52 +800,18 @@ export class QuickSettingsManager {
           w <= 2 || h <= 2
         ) {
           // Transient reflow grace: a card (usually a borrowed slider) can
-          // report 0-size for a frame while layout settles. Reuse its last
-          // good backing geometry a few frames instead of hiding, so the
-          // glass never flashes missing. Frozen snapshots already cover the
-          // submenu handoff; this covers live reflows after unfreeze.
-          let grace = this._cardLastGoodRect.get(card);
-          if (grace && grace.framesLeft > 0 && backing.get_parent()) {
+          // report 0-size for a frame while layout settles. Reuse its last good
+          // rect for a few frames so its region never flashes missing.
+          const grace = this._cardLastGoodRect.get(card);
+          if (grace && grace.framesLeft > 0) {
             grace.framesLeft--;
-            try {
-              backing.show();
-              backing.opacity = grace.opacity;
-              backing.set_position(grace.x, grace.y);
-              backing.set_size(grace.w, grace.h);
-              backing.set_scale(grace.sx, grace.sy);
-            } catch (e) {
-              try { backing.hide(); } catch (e2) {}
-            }
-            continue;
+            pushRegion(grace.x, grace.y, grace.w, grace.h, stCard);
+          } else {
+            this._cardLastGoodRect.delete(card);
           }
-          this._cardLastGoodRect.delete(card);
-          backing.hide();
           continue;
         }
 
-        // Record the region this card can actually sample, so window clones can
-        // be culled to it. The reach is the shader padding plus the refracted
-        // texture fetch: the fragment shader clamps its UV displacement to 0.30
-        // of a normalised axis, and that offset is applied at the refracted UV —
-        // itself displaced a further 0.30 — so a fetch can land up to ~0.35 of
-        // the backing's short side away from the fragment. Extending by that much
-        // keeps a window whose top edge sits just outside the card from being
-        // culled when its content is visible through the bevel.
-        let padding = ENABLE_QS_CARD_SHADER ? QS_CARD_SHADER_PADDING : 0;
-        let reach = ENABLE_QS_CARD_SHADER ? Math.max(padding, Math.min(w, h) * 0.35) : 0;
-        let rect = rects[rectCount];
-        if (!rect) {
-          rect = { x: 0, y: 0, w: 0, h: 0 };
-          rects[rectCount] = rect;
-        }
-        rect.x = x - reach;
-        rect.y = y - reach;
-        rect.w = w + reach * 2;
-        rect.h = h + reach * 2;
-        rectCount++;
-
-        if (!backing.visible) backing.show();
-        // Calculate the true effective opacity by synchronously multiplying up the actor tree
         let effectiveOpacity = 255;
         if (typeof card.get_paint_opacity === 'function') {
           effectiveOpacity = card.get_paint_opacity();
@@ -1265,6 +822,9 @@ export class QuickSettingsManager {
             curr = curr.get_parent();
           }
         }
+        // Every card shares the popup's ancestors, so one value fades the whole
+        // grid's glass in lockstep with the content.
+        opacity = Math.round(effectiveOpacity);
 
         let effectiveScale = 1.0;
         let currScale: Clutter.Actor | null = card;
@@ -1272,229 +832,81 @@ export class QuickSettingsManager {
           effectiveScale *= currScale.scale_x;
           currScale = currScale.get_parent();
         }
-
-        // Frozen geometry pins the backing to the settled size/scale, so any
-        // transient ancestor scale during the fade can't shrink the glass.
-        if (this._cardBackingsFrozen && snapshot) {
-          effectiveScale = snapshot.effectiveScale;
-        }
+        if (this._cardBackingsFrozen && snapshot) effectiveScale = snapshot.effectiveScale;
 
         let unscaledX = x;
         let unscaledY = y;
         let trackingScale = 1.0;
         // Stamp open animation: the whole popup is scaled about the boxpointer's
-        // pivot. Track it — render each backing at the card's transformed
-        // (scaled) position and scaled size so the liquid stays glued to the
-        // content exactly like the calendar's bgActor. (Pinning the glass to the
-        // settled layout instead made content visibly slide over static glass.)
+        // pivot. Track it so the glass stays glued to the content.
         if (this._isAnimating && effectiveScale > 0.001 && Math.abs(effectiveScale - 1) > 0.001) {
           trackingScale = effectiveScale;
         } else if (!this._isAnimating && effectiveScale > 0.001 && effectiveScale < 0.999 && this.animActor) {
-          let [animX, animY] = this.animActor.get_transformed_position();
-          let [animW, animH] = this.animActor.get_size();
-          let pivotX = animX + this.animActor.pivot_point.x * animW * this.animActor.scale_x;
-          let pivotY = animY + this.animActor.pivot_point.y * animH * this.animActor.scale_y;
+          const [animX, animY] = this.animActor.get_transformed_position();
+          const [animW, animH] = this.animActor.get_size();
+          const pivotX = animX + this.animActor.pivot_point.x * animW * this.animActor.scale_x;
+          const pivotY = animY + this.animActor.pivot_point.y * animH * this.animActor.scale_y;
           unscaledX = pivotX + (x - pivotX) / effectiveScale;
           unscaledY = pivotY + (y - pivotY) / effectiveScale;
         }
 
-        let backingX = unscaledX;
-        let backingY = unscaledY;
-        // Reuse the per-sync affine map instead of deriving it per card. When
-        // the backings' parent is the settled uiGroup the map is the identity,
-        // so the coordinates pass through untouched.
+        let regionX = unscaledX;
+        let regionY = unscaledY;
         if (projection.success && !projectionIsIdentity) {
-          backingX = projection.x + projection.xx * unscaledX + projection.yx * unscaledY;
-          backingY = projection.y + projection.xy * unscaledX + projection.yy * unscaledY;
+          regionX = projection.x + projection.xx * unscaledX + projection.yx * unscaledY;
+          regionY = projection.y + projection.xy * unscaledX + projection.yy * unscaledY;
         }
-        let unscaledW = w * trackingScale;
-        let unscaledH = h * trackingScale;
+        let regionW = w * trackingScale;
+        let regionH = h * trackingScale;
 
-        // Force square backing for circle-classified cards to guarantee circular glass.
-        // If the grid allocates a non-square cell (e.g. 67×74), the shader would render
-        // an oval even with border-radius:999px. Clamping to Math.min(w,h) fixes this.
+        // A circle-classified card in a non-square cell would render an oval;
+        // clamp to the shorter side so the region (and its radius) stay round.
         if (stCard.has_style_class_name?.('liquid-glass-card-circle')) {
-          const side = Math.min(unscaledW, unscaledH);
-          unscaledW = side;
-          unscaledH = side;
+          const side = Math.min(regionW, regionH);
+          regionW = side;
+          regionH = side;
         }
 
-        let sourceStageX = unscaledX;
-        let sourceStageY = unscaledY;
-
-        if (ENABLE_QS_CARD_SHADER) {
-          backingX -= QS_CARD_SHADER_PADDING * effectiveScale;
-          backingY -= QS_CARD_SHADER_PADDING * effectiveScale;
-          unscaledW += QS_CARD_SHADER_PADDING * 2;
-          unscaledH += QS_CARD_SHADER_PADDING * 2;
-          sourceStageX -= QS_CARD_SHADER_PADDING;
-          sourceStageY -= QS_CARD_SHADER_PADDING;
-        }
-
-        let backingOpacity = Math.round(effectiveOpacity);
-        let backingScale = effectiveScale / trackingScale;
-        let geometry = (backing as any)._liquidGlassGeometry || {};
-        if (geometry.opacity !== backingOpacity) backing.opacity = backingOpacity;
-        if (geometry.x !== backingX || geometry.y !== backingY)
-          backing.set_position(backingX, backingY);
-        if (geometry.w !== unscaledW || geometry.h !== unscaledH)
-          backing.set_size(unscaledW, unscaledH);
-        if (geometry.scale !== backingScale)
-          backing.set_scale(backingScale, backingScale);
-        geometry.x = backingX;
-        geometry.y = backingY;
-        geometry.w = unscaledW;
-        geometry.h = unscaledH;
-        geometry.scale = backingScale;
-        geometry.opacity = backingOpacity;
-        (backing as any)._liquidGlassGeometry = geometry;
-        // Remember the applied geometry for the transient-reflow grace above.
         this._cardLastGoodRect.set(card, {
-          x: backingX, y: backingY, w: unscaledW, h: unscaledH,
-          sx: effectiveScale / trackingScale, sy: effectiveScale / trackingScale,
-          opacity: Math.round(effectiveOpacity), framesLeft: 3,
+          x: regionX, y: regionY, w: regionW, h: regionH,
+          sx: 1, sy: 1, opacity: Math.round(effectiveOpacity), framesLeft: 3,
         });
 
-        let clipBox = (backing as any)._liquidGlassClipBox as St.Widget | undefined;
-        let fboContainer = (backing as any)._liquidGlassFboContainer as Clutter.Actor | undefined;
-        let bgClone = (backing as any)._liquidGlassBgClone as Clutter.Actor | undefined;
-        if (ENABLE_QS_CARD_SHADER && clipBox && fboContainer && bgClone) {
-          syncBackdropClone(bgClone);
-          if (geometry.clipW !== unscaledW || geometry.clipH !== unscaledH) {
-            clipBox.set_size(unscaledW, unscaledH);
-            fboContainer.set_size(unscaledW, unscaledH);
-            // The clone's box is what a redraw of it can reach; without one it
-            // reports its source's, which is the whole monitor.
-            bgClone.set_size(unscaledW, unscaledH);
-            geometry.clipW = unscaledW;
-            geometry.clipH = unscaledH;
-          }
-          if (!geometry.fboInitialized) {
-            clipBox.set_position(0, 0);
-            fboContainer.set_scale(1.0, 1.0);
-            fboContainer.set_position(0, 0);
-            bgClone.set_scale(1.0, 1.0);
-            geometry.fboInitialized = true;
-          }
-          let bgX = -sourceStageX;
-          let bgY = -sourceStageY;
-          if (geometry.bgX !== bgX || geometry.bgY !== bgY)
-            bgClone.set_position(bgX, bgY);
-          if (!bgClone.visible) bgClone.show();
-          geometry.bgX = bgX;
-          geometry.bgY = bgY;
-          // Window clones last changed on the frame that captured their
-          // positions, so most animation ticks only move the container while
-          // the children (built in source-window coordinates) ride along. A
-          // backing with no clones yet (newly created) always rebuilds, so a
-          // consumed throttle budget can never leave glass permanently empty.
-          let backingClones = (backing as any)._liquidGlassWindowClones as Map<Clutter.Actor, Clutter.Clone> | undefined;
-          let backingNeedsBuild = (!backingClones || backingClones.size === 0) && windowActors.length > 0;
-          let rebuildChildren = (rebuildWindowClones && !skipWindowClones && windowSetChanged) || backingNeedsBuild;
-          if (rebuildChildren) this._cardCloneSig = windowSig;
-          this._syncBackingWindowClones(
-            backing,
-            sourceStageX,
-            sourceStageY,
-            windowActors,
-            rebuildChildren,
-            projectionIsIdentity ? rect : null,
-          );
-        }
-
-        // Style classes only change when a card is re-classified, which
-        // happens on notify::allocation. Compare against the key this frame
-        // already established and skip the whole block on repeat frames.
-        let stBacking = backing as any;
-        let classNames = [
-          'liquid-glass-card-toggle',
-          'liquid-glass-card-slider',
-          'liquid-glass-card-circle',
-          'liquid-glass-card-squircle',
-          'liquid-glass-card-pill',
-          'liquid-glass-card-rect',
-          'liquid-glass-card-compact',
-        ];
-        let classKey = '';
-        for (let i = 0; i < classNames.length; i++) {
-          classKey += stCard.has_style_class_name?.(classNames[i]) ? '1' : '0';
-        }
-        if (stBacking._liquidGlassClassKey !== classKey) {
-          stBacking._liquidGlassClassKey = classKey;
-          for (let i = 0; i < classNames.length; i++) {
-            if (classKey.charCodeAt(i) === 49) {
-              stBacking.add_style_class_name?.(classNames[i]);
-            } else {
-              stBacking.remove_style_class_name?.(classNames[i]);
-            }
-          }
-        }
-
-        let effect = backing.get_effect('liquid-glass-card-backing-effect') as LiquidEffect | null;
-        if (ENABLE_QS_CARD_SHADER && effect) {
-          let stEffect = effect as any;
-
-          // Dirty-check the resolution so we don't upload GL uniforms on every
-          // animation tick for cards whose size hasn't changed.
-          if (stEffect._liquidLastResW !== unscaledW || stEffect._liquidLastResH !== unscaledH) {
-            stEffect._liquidLastResW = unscaledW;
-            stEffect._liquidLastResH = unscaledH;
-            effect.setResolution(unscaledW, unscaledH);
-          }
-
-          let isChecked = false;
-          try { if (stCard.checked === true) isChecked = true; } catch(e){}
-          try { if (stCard.has_style_pseudo_class && stCard.has_style_pseudo_class('checked')) isChecked = true; } catch(e){}
-          // classNames is ordered ...,circle,squircle,pill,... so the already
-          // computed bitmask answers the remaining class questions without more
-          // GI round trips.
-          if (stCard.has_style_class_name?.('checked')) isChecked = true;
-          let isCircle = classKey.charCodeAt(2) === 49;
-          let isSquircle = classKey.charCodeAt(3) === 49;
-          let isPill = classKey.charCodeAt(4) === 49;
-
-          // Each of these setters marshals a GObject.Value per call. Cache the
-          // last uploaded values and skip when nothing changed: tint and radius
-          // only move on a state toggle or resize, not per frame.
-          let tintR: number, tintG: number, tintB: number, tintStrength: number;
-          if (isChecked) {
-            // Apply GNOME Blue tint internally via the glass shader
-            tintR = 53/255; tintG = 132/255; tintB = 228/255; tintStrength = 0.35;
-          } else {
-            // Revert to global tint settings when unchecked
-            tintR = 1.0; tintG = 1.0; tintB = 1.0;
-            tintStrength = 0;
-            try { tintStrength = this._settings.get_double('quick-settings-tint-strength'); } catch(e){}
-          }
-          if (stEffect._liquidTintR !== tintR || stEffect._liquidTintG !== tintG || stEffect._liquidTintB !== tintB) {
-            stEffect._liquidTintR = tintR;
-            stEffect._liquidTintG = tintG;
-            stEffect._liquidTintB = tintB;
-            effect.setTintColor(tintR, tintG, tintB);
-          }
-          if (stEffect._liquidTintStrength !== tintStrength) {
-            stEffect._liquidTintStrength = tintStrength;
-            effect.setTintStrength(tintStrength);
-          }
-
-          let cornerRadius: number;
-          if (isCircle || isPill) {
-            cornerRadius = Math.min(w, h) / 2;
-          } else if (isSquircle) {
-            cornerRadius = Math.round(Math.min(w, h) * 0.46);
-          } else {
-            cornerRadius = 18;
-          }
-          if (stEffect._liquidCornerRadius !== cornerRadius) {
-            stEffect._liquidCornerRadius = cornerRadius;
-            effect.setCornerRadius(cornerRadius);
-          }
-
-        }
-      } catch (e) {
-        try { backing.hide(); } catch (e2) {}
-      }
+        pushRegion(regionX, regionY, regionW, regionH, stCard);
+      } catch (e) {}
     }
+
+    if (visibleCount === 0) {
+      try { glass.hide(); glass.opacity = 0; } catch (e) {}
+      return;
+    }
+
+    if (regions.length > 16)
+      this._logger.log(`[Liquid Glass] Quick Settings has ${regions.length} cards; only the first 16 get glass regions.`);
+
+    // Multi-region glass draws no shadow, so the actor only has to cover the
+    // union of the padded regions.
+    const bboxX = Math.floor(minX);
+    const bboxY = Math.floor(minY);
+    const bboxW = Math.max(1, Math.ceil(maxX) - bboxX);
+    const bboxH = Math.max(1, Math.ceil(maxY) - bboxY);
+
+    const relative: GlassRegion[] = regions.map(r => ({
+      x: r.x - bboxX, y: r.y - bboxY, w: r.w, h: r.h,
+      tintR: r.tintR, tintG: r.tintG, tintB: r.tintB,
+      baseStrength: r.baseStrength, radius: r.radius,
+    }));
+
+    try {
+      glass.set_position(bboxX, bboxY);
+      glass.set_size(bboxW, bboxH);
+      glass.setResolution(bboxW, bboxH);
+      glass.setGlassGeometry(0, 0, bboxW, bboxH);
+      glass.setGlassRegions(relative);
+      if (!glass.visible) glass.show();
+      glass.opacity = opacity;
+      glass.syncSources();
+    } catch (e) {}
   }
 
   getSubmenuMorphBounds(card: Clutter.Actor) {
@@ -1504,8 +916,9 @@ export class QuickSettingsManager {
 
       this._syncCardBackings();
 
-      let backing = this._cardBackings.get(card);
-      let source: any = backing && backing.get_parent?.() ? backing : card;
+      // The one glass draws this card's region itself, so the card's own rect
+      // is the morph source.
+      let source: any = card;
       let [x, y] = source.get_transformed_position();
       let [w, h] = source.get_size();
       let scaleX = typeof source.scale_x === 'number' ? source.scale_x : 1.0;
@@ -1523,42 +936,6 @@ export class QuickSettingsManager {
     } catch (e) {
       return null;
     }
-  }
-
-  // Change token for the window set the whole-menu backdrop clones. Unlike
-  // _getCardBackingSignature this is evaluated on every idle tick, so it only
-  // looks at the windows and only records what the clone sync actually consumes.
-  // The order of the entries is significant: the clone container paints its
-  // children in list order, so a restack has to invalidate the token even though
-  // every window keeps its geometry.
-  //
-  // The visible/mapped flags are the point of the whole thing: mutter hides
-  // (unmaps) window actors that leave the active workspace, and the clone sync
-  // drops those windows. Keying on geometry alone would leave the previous
-  // workspace's windows latched behind the menu after a workspace switch.
-  _backdropWindowSignature(windowActors: any[] | null = null): string {
-    let parts: string[] = [];
-    try {
-      for (let windowActor of (windowActors ?? global.get_window_actors())) {
-        let metaWindow = windowActor.get_meta_window?.();
-        if (!metaWindow) continue;
-
-        parts.push([
-          metaWindow.minimized ? 1 : 0,
-          windowActor.visible ? 1 : 0,
-          windowActor.mapped ? 1 : 0,
-          Math.round(windowActor.x),
-          Math.round(windowActor.y),
-          Math.round(windowActor.width),
-          Math.round(windowActor.height),
-          Math.round(windowActor.scale_x * 1000),
-          Math.round(windowActor.scale_y * 1000),
-          Math.round(windowActor.translation_x),
-          Math.round(windowActor.translation_y),
-        ].join(','));
-      }
-    } catch (e) {}
-    return parts.join('|');
   }
 
   _getCardBackingSignature() {
@@ -1644,17 +1021,6 @@ export class QuickSettingsManager {
         return GLib.SOURCE_CONTINUE;
       }
 
-      // Cheap window-set token, checked on every 16ms tick *before* the interval
-      // gate so it also runs in idle mode: a restack or a workspace switch has to
-      // reach the backdrop within a frame, not after the 750ms idle interval.
-      // Leaving idle mode as well makes the next tick re-sync the card backings,
-      // which clone the same windows.
-      if (this._backdropWindowSignature() !== this._qsBlurCloneSig) {
-        this._cardBackingIdleMode = false;
-        this._cardBackingStableFrames = 0;
-        try { this._syncBlurOverlayGeometry(null, false); } catch (e) {}
-      }
-
       let now = GLib.get_monotonic_time();
       let intervalUs = this._cardBackingIdleMode ? idleIntervalUs : activeIntervalUs;
       if (lastSyncTime !== 0 && now - lastSyncTime < intervalUs) {
@@ -1677,11 +1043,10 @@ export class QuickSettingsManager {
       return GLib.SOURCE_CONTINUE;
     };
 
-    this._syncCardBackings(false, true, null, false);
-    // Same reason as the tick above: the backdrop has to be showing the real
-    // windows on the frame the menu appears, before the first 16ms tick runs.
-    // Move-only, so this costs nothing unless the window set actually changed.
-    try { this._syncBlurOverlayGeometry(null, false); } catch (e) {}
+    // The backdrop is live before the first 16ms tick so the menu's first
+    // painted frame already shows the real windows; the glass's relays keep it
+    // current afterwards without any window-set token of our own.
+    this._syncCardBackings();
     this._cardBackingLastSignature = this._getCardBackingSignature();
     this._cardBackingSyncId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, syncTick);
   }
@@ -2458,7 +1823,6 @@ export class QuickSettingsManager {
           }
       } catch (e) {}
       this._cardActors.add(card);
-      this._getOrCreateCardBacking(card);
       // A card that was not here before means the popup tree grew, so the clip
       // sweep recorded for this root is now incomplete. Invalidating it lets
       // the post-open sweep replay a complete list instead of re-walking the
@@ -2634,108 +1998,16 @@ export class QuickSettingsManager {
       sampleIntervalMs: this._settings.get_int('quick-settings-sample-interval-ms'),
     };
 
-    // The menu-level glass actor (bgActor/clipBox/fboContainer/blurEffect/
-    // LiquidEffect) was never shown: it was built, inserted below the menu and
-    // immediately hidden, with no path that ever revealed it. The visible glass
-    // comes from the per-card backings plus the backdrop blur overlay below, so
-    // the whole pipeline was dead weight — including a LiquidEffect, an
-    // ACTOR-mode blur, a background clone and a window-clone container that
-    // only ever rendered into a hidden actor.
-    //
-    // Only the corner radius is still consumed (by the blur overlay's feathered
-    // mask), so that is all that is read here.
-    let tintColorStr = this._settings.get_string('quick-settings-tint-color');
-    let tintStrength = this._settings.get_double('quick-settings-tint-strength');
+    // The visible glass is one multi-region BackdropGlass behind the whole
+    // grid (see _getOrCreateGlass / _syncCardBackings): the same strip-copy +
+    // Dual Kawase + glass.frag pipeline the calendar menu and the top bar use,
+    // with one region per card. The old menu-level glass actor and the
+    // whole-menu Shell.BlurEffect overlay were two extra copies of that
+    // pipeline and are gone.
     this._cornerRadius = this._settings.get_double('quick-settings-corner-radius');
 
-    // Create a localized background blur overlay positioned behind the QS menu.
-    // We blur real clones of the desktop/windows (Shell.BlurMode.ACTOR, the
-    // same proven pipeline the card backings use) instead of BACKGROUND mode,
-    // which does not produce visible blur in some Mutter builds. The feathered
-    // BackdropBlurEffect mask chained after it rounds the corners and fades the
-    // blur out toward the edges so no visible rectangle remains, and it also
-    // applies the actor's animated opacity so the blur fades in lockstep with
-    // the menu.
-    {
-      this._qsBlurOverlay = new St.Widget({
-        style_class: 'liquid-glass-qs-blur-overlay',
-        reactive: false,
-        can_focus: false,
-        clip_to_allocation: false,
-        opacity: 0,
-      });
-      this._qsBlurOverlay.set_size(2, 2); // Initial placeholder size
-
-      let qsClipBox = new St.Widget({ clip_to_allocation: true, reactive: false });
-      qsClipBox.set_size(2, 2);
-      this._qsBlurOverlay.add_child(qsClipBox);
-
-      let qsFboContainer = new UnpickableActor();
-      qsFboContainer.set_size(2, 2);
-      qsFboContainer.set_pivot_point(0, 0);
-      qsClipBox.add_child(qsFboContainer);
-
-      // Reduced-resolution blur: ShellBlurEffect allocates its offscreen buffer
-      // at the actor's own allocation, so the buffer is the size of whatever
-      // qsFboContainer is allocated at. Everything inside qsHalfBox is drawn at
-      // 1/k to fit the whole menu-sized source into that smaller buffer, and
-      // qsFboContainer's own scale of k puts the blurred result back at full
-      // size. The mask below stays outside both, so it is still evaluated per
-      // physical pixel and the feathered corners keep their full-resolution
-      // accuracy. See QS_BLUR_FBO_DIVISOR.
-      let qsHalfBox = new UnpickableActor();
-      qsHalfBox.set_pivot_point(0, 0);
-      qsHalfBox.set_scale(1, 1);
-      qsFboContainer.add_child(qsHalfBox);
-
-      let qsBgClone = createBackdropClone();
-      qsHalfBox.add_child(qsBgClone);
-
-      let qsWindowClonesContainer = new UnpickableActor();
-      qsHalfBox.add_child(qsWindowClonesContainer);
-
-      this._qsBlurOverlayEffect = new Shell.BlurEffect({
-        radius: this._settings.get_int('quick-settings-blur-radius'),
-        mode: Shell.BlurMode.ACTOR,
-      });
-      qsFboContainer.add_effect(this._qsBlurOverlayEffect);
-
-      let mask = new BackdropBlurEffect({ extensionPath: this.extensionPath } as any);
-      mask.setCornerRadius(this._cornerRadius || QS_BLUR_OVERLAY_CORNER_RADIUS);
-      mask.setFeather(QS_BLUR_OVERLAY_FEATHER);
-      this._qsBlurOverlay.add_effect(mask);
-      this._qsBlurMask = mask;
-
-      this._qsBlurClipBox = qsClipBox;
-      this._qsBlurFboContainer = qsFboContainer;
-      this._qsBlurHalfBox = qsHalfBox;
-      this._qsBlurBgClone = qsBgClone;
-      this._qsBlurWindowClonesContainer = qsWindowClonesContainer;
-      this._qsBlurWindowClones = new Map();
-
-      // Replace the raw setting above with the reduced-resolution radius and
-      // the matching counter-scale on qsHalfBox.
-      this._applyOverlayBlurRadius();
-
-      this._qsBlurOverlay.hide();
-      // Insert as a sibling directly below the menu (same as the card backings)
-      // so it sits right behind the menu instead of being buried at the bottom
-      // of uiGroup under the panel.
-      let qsMenuParent = this.menu?.actor?.get_parent?.() || Main.layoutManager.uiGroup;
-      try {
-        qsMenuParent.insert_child_below(this._qsBlurOverlay, this.menu.actor);
-      } catch (e) {
-        try { Main.layoutManager.uiGroup.add_child(this._qsBlurOverlay); } catch (e2) {}
-      }
-    }
-
-    // Function to create clones of the desktop wallpaper and all visible windows
-    // This is necessary because GNOME cannot blur content behind an overlay popup directly
-
-    // Starts the render loop and builds fresh clones when the menu is opened
-    // The menu-level glass actor these helpers reset is gone (see above).
-    // startFrameSync is kept as a no-op so the existing open/mapped call sites
-    // stay untouched.
+    // Kept as no-ops so the open/mapped call sites that drove the removed frame
+    // loop stay untouched; the single glass syncs from the card-backing tick.
     let startFrameSync = () => {};
 
     let stopFrameSync = () => {
@@ -2861,7 +2133,6 @@ export class QuickSettingsManager {
         this.menu.actor.remove_all_transitions?.();
         this.animActor.remove_all_transitions();
         this._stampActor?.remove_all_transitions?.();
-        this._qsBlurOverlay?.remove_all_transitions?.();
       } catch (e) {}
       // Fade the popup out. The stamp leaves the scale alone on close; only the
       // opacity moves, and the glass follows it frame for frame.
@@ -2891,10 +2162,6 @@ export class QuickSettingsManager {
             // Tidy up in case anything survived.
             if (this.animActor) {
               this.animActor.opacity = 0;
-            }
-            if (this._qsBlurOverlay) {
-              this._qsBlurOverlay.opacity = 0;
-              this._qsBlurOverlay.hide();
             }
           }
         }
@@ -2942,339 +2209,10 @@ export class QuickSettingsManager {
   }
 
   _syncGeometry() {
-    // The menu-level glass actor is gone; the per-card backings and the blur
-    // overlay own their own geometry now. Kept as a call-site stable no-op.
+    // The single multi-region glass owns its own geometry inside
+    // _syncCardBackings, so there is no menu-sized actor left to place. Kept as
+    // a call-site stable no-op.
     return;
-  }
-
-  // Syncs the overlay's window clones so the ACTOR-mode blur shows the live
-  // windows behind the menu. Mirrors _syncBackingWindowClones (card backings).
-  // When rebuildChildren is false only the container moves; children ride
-  // along untouched (used on animation ticks after the first frames).
-  _syncQsBlurOverlayWindowClones(stageX: number, stageY: number, frameWindowActors: any[] | null = null, rebuildChildren: boolean = true) {
-    let container = this._qsBlurWindowClonesContainer;
-    if (!container) return;
-
-    try {
-      let state = (container as any)._liquidGlassCloneState || {};
-      let containerX = -stageX;
-      let containerY = -stageY;
-      if (state.x !== containerX || state.y !== containerY)
-        container.set_position(containerX, containerY);
-      if (state.scale !== 1.0)
-        container.set_scale(1.0, 1.0);
-      state.x = containerX;
-      state.y = containerY;
-      state.scale = 1.0;
-      (container as any)._liquidGlassCloneState = state;
-
-      if (!rebuildChildren) return;
-
-      let windowActors = frameWindowActors ?? global.get_window_actors();
-      let activeWindows = new Set<Clutter.Actor>();
-      let zOrderDirty = false;
-      for (let windowActor of windowActors) {
-        let metaWindow = windowActor.get_meta_window?.();
-        if (!metaWindow || metaWindow.minimized || !windowActor.visible)
-          continue;
-
-        activeWindows.add(windowActor);
-        let clone = this._qsBlurWindowClones.get(windowActor);
-        if (!clone) {
-          clone = new UnpickableClone({ source: windowActor });
-          container.add_child(clone);
-          this._qsBlurWindowClones.set(windowActor, clone);
-          zOrderDirty = true;
-        }
-
-        clone.set_position(windowActor.x, windowActor.y);
-        clone.set_size(windowActor.width, windowActor.height);
-        clone.set_scale(windowActor.scale_x, windowActor.scale_y);
-        clone.translation_x = windowActor.translation_x;
-        clone.translation_y = windowActor.translation_y;
-      }
-
-      for (let [windowActor, clone] of Array.from(this._qsBlurWindowClones.entries())) {
-        if (!activeWindows.has(windowActor)) {
-          try { clone.destroy(); } catch (e) {}
-          this._qsBlurWindowClones.delete(windowActor);
-          zOrderDirty = true;
-        }
-      }
-
-      if (zOrderDirty || this._cloneOrderChanged(container, activeWindows, this._qsBlurWindowClones)) {
-        let index = 0;
-        for (let windowActor of activeWindows) {
-          let clone = this._qsBlurWindowClones.get(windowActor);
-          if (!clone) continue;
-          try { container.set_child_at_index(clone, index); } catch (e) {}
-          index++;
-        }
-      }
-    } catch (e) {}
-  }
-
-  /**
-   * The popup's *settled* stage rect: where it sits once the stamp has finished.
-   *
-   * The backdrop is a screen-anchored sheet. Measuring it from the stamp's live
-   * transformed bounds made its feathered edges ride the stamp, so the whole
-   * frosted rectangle slid and grew with the popup while it sprang into place.
-   * Traced over one open (popup 350x454, stamp 1.08 -> 1.0 with the usual
-   * undershoot), the overlay rect swung 31px in width, 41px in height and 16px
-   * in x; that reads as the blur being dragged around by the menu instead of
-   * sitting behind it.
-   *
-   * The stamp is a pure scale about the popup's pivot, so the settled rect is
-   * recovered by removing exactly that scale: the pivot displacement
-   * (1 - s) * pivot is expressed in the actor's own untransformed units and
-   * mapped to the stage, and the size divides the scale out. The result is
-   * bit-stable for as long as the popup's layout is, which also keeps the
-   * blur's offscreen buffer at one size for the whole transition instead of
-   * reallocating it on the frames that resize it.
-   *
-   * Returns null when the popup has no usable geometry yet.
-   *
-   * The anchored rect is the resting one, so the stamped popup only stays
-   * inside it while the stamp's overhang fits in QS_BLUR_OVERLAY_PADDING. At
-   * the default open scale (1.08, i.e. 4% of a ~350x454 popup = 14px sideways
-   * and 18px down) it uses well under half of the 62px margin; a much larger
-   * `quick-settings-open-scale` would eventually push the popup past the
-   * feathered edge for the first frames of an open.
-   */
-  _stampSettledStageRect() {
-    let stamp = this._stampActor;
-    if (!stamp) return null;
-
-    let [absX, absY] = stamp.get_transformed_position();
-    let [transformedW, transformedH] = stamp.get_transformed_size();
-    if (
-      !Number.isFinite(absX) || !Number.isFinite(absY) ||
-      !Number.isFinite(transformedW) || !Number.isFinite(transformedH) ||
-      transformedW <= 0 || transformedH <= 0
-    ) return null;
-
-    let settledW = transformedW;
-    let settledH = transformedH;
-
-    let [scaleX, scaleY] = stamp.get_scale();
-    if (Number.isFinite(scaleX) && Number.isFinite(scaleY) &&
-        scaleX > 0 && scaleY > 0 && (scaleX !== 1 || scaleY !== 1)) {
-      let [width, height] = stamp.get_size();
-      let [pivotX, pivotY] = stamp.get_pivot_point();
-
-      // The pivot is normalized, so the displacement of the actor's origin is
-      // (1 - s) * pivot * size in the actor's own (pre-scale) units.
-      let dx = (1 - scaleX) * pivotX * (Number.isFinite(width) ? width : 0);
-      let dy = (1 - scaleY) * pivotY * (Number.isFinite(height) ? height : 0);
-
-      // Those units are not stage pixels: the popup sits inside a parent that
-      // may itself scale (a scaled uiGroup, a scaled monitor). The factor is
-      // exactly the transformed size divided by the untransformed size and the
-      // actor's own scale.
-      let parentScaleX = width > 0 ? transformedW / (width * scaleX) : 1;
-      let parentScaleY = height > 0 ? transformedH / (height * scaleY) : 1;
-
-      settledW = transformedW / scaleX;
-      settledH = transformedH / scaleY;
-      absX -= dx * parentScaleX;
-      absY -= dy * parentScaleY;
-    }
-
-    return { x: absX, y: absY, w: settledW, h: settledH };
-  }
-
-  // Positions the blur overlay behind the QS menu using the popup's *settled*
-  // stage bounds (see _stampSettledStageRect), with generous padding so the
-  // feathered mask can fade the edges smoothly.
-  // rebuildWindowClones=false moves only the clone container (animation ticks).
-  _syncBlurOverlayGeometry(frameWindowActors: any[] | null = null, rebuildWindowClones: boolean = true) {
-    return timed('syncBlur', () => this._syncBlurOverlayGeometryImpl(frameWindowActors, rebuildWindowClones));
-  }
-
-  _syncBlurOverlayGeometryImpl(frameWindowActors: any[] | null = null, rebuildWindowClones: boolean = true) {
-    if (!this._qsBlurOverlay || !this._stampActor) return;
-    // Quick Settings drives the sheet from the popup's settled rect; the shared
-    // rect method owns the parenting, projection and geometry.
-    let settled = this._stampSettledStageRect();
-    if (!settled) return;
-    this._syncBlurOverlayGeometryRect(
-      settled, { padSide: QS_BLUR_OVERLAY_PADDING, padTop: 0 },
-      frameWindowActors, rebuildWindowClones);
-  }
-
-  /**
-   * Sizes, positions and re-populates the frosted backdrop sheet for an
-   * arbitrary stage rect.
-   *
-   * This is the whole of the backdrop's geometry logic, factored out of the
-   * Quick Settings path so the floating submenu can drive the same sheet: the
-   * blur buffer, the feathered corner mask, the wallpaper clone and the window
-   * clones are all pure functions of the rect plus the padding, so both
-   * surfaces get an identical frost instead of the submenu carrying a second
-   * blur stack of its own.
-   *
-   * `paddingOverride` supplies padSide/padTop for surfaces whose frost margin
-   * differs from the menu's (the submenu sits away from the panel edge, so it
-   * feathers on all four sides).
-   */
-  _syncBlurOverlayGeometryRect(settled: {x: number, y: number, w: number, h: number},
-    paddingOverride: {padSide: number, padTop: number} | null = null,
-    frameWindowActors: any[] | null = null,
-    rebuildWindowClones: boolean = true) {
-    if (!this._qsBlurOverlay) return;
-    this._originProjection = null;
-    try {
-      let parent = this.menu?.actor?.get_parent?.() || Main.layoutManager.uiGroup;
-      if (parent && this._qsBlurOverlay.get_parent() !== parent) {
-        try {
-          this._qsBlurOverlay.get_parent()?.remove_child(this._qsBlurOverlay);
-          // Keep the sheet as a sibling directly below the popup (mirrors the
-          // card backings).
-          if (this.menu?.actor && parent.contains(this.menu.actor))
-            parent.insert_child_below(this._qsBlurOverlay, this.menu.actor);
-          else
-            parent.add_child(this._qsBlurOverlay);
-        } catch (e) {}
-      }
-
-      // Convert stage coordinates to the overlay's parent-local coordinates via
-      // the cached affine map rather than allocating a Clutter.Point here.
-      let projection = this._getOriginProjection(parent);
-
-      let absX = settled.x;
-      let absY = settled.y;
-      let transformedW = settled.w;
-      let transformedH = settled.h;
-
-      // Padding around the surface. Sides/bottom get the full-frost margin +
-      // the outward feather so the soft fade fits inside the overlay; the top
-      // is flush (0) for the menu so the blur never extends up into the top
-      // panel.
-      let padSide = paddingOverride ? paddingOverride.padSide : QS_BLUR_OVERLAY_PADDING;
-      let padTop = paddingOverride ? paddingOverride.padTop : 0;
-      let overlayStageX = absX - padSide;
-      let overlayStageY = absY - padTop;
-      let overlayW = transformedW + padSide * 2;
-      let overlayH = transformedH + padTop + padSide;
-      let overlayX = overlayStageX;
-      let overlayY = overlayStageY;
-      if (projection.success && !projection.identity) {
-        overlayX = projection.x + projection.xx * overlayStageX + projection.yx * overlayStageY;
-        overlayY = projection.y + projection.xy * overlayStageX + projection.yy * overlayStageY;
-      }
-
-      let roundedX = Math.round(overlayX);
-      let roundedY = Math.round(overlayY);
-      let roundedW = Math.round(overlayW);
-      let roundedH = Math.round(overlayH);
-      let geometry = (this._qsBlurOverlay as any)._liquidGlassGeometry || {};
-      if (geometry.x !== roundedX || geometry.y !== roundedY)
-        this._qsBlurOverlay.set_position(roundedX, roundedY);
-      if (geometry.w !== roundedW || geometry.h !== roundedH)
-        this._qsBlurOverlay.set_size(roundedW, roundedH);
-      geometry.x = roundedX;
-      geometry.y = roundedY;
-      geometry.w = roundedW;
-      geometry.h = roundedH;
-      (this._qsBlurOverlay as any)._liquidGlassGeometry = geometry;
-
-      // Keep the feathered mask aligned with the overlay. Scale to physical
-      // pixels so the rounded mask stays pixel-accurate on HiDPI displays.
-      // Theme scale is cached (500ms TTL) to avoid a GI round-trip per tick.
-      if (this._qsBlurMask) {
-        let scale = this._themeScaleFactor();
-        let maskW = Math.max(1, Math.round(overlayW * scale));
-        let maskH = Math.max(1, Math.round(overlayH * scale));
-        let cornerRadius = (this._cornerRadius || QS_BLUR_OVERLAY_CORNER_RADIUS) * scale;
-        let feather = QS_BLUR_OVERLAY_FEATHER * scale;
-        if (geometry.maskW !== maskW || geometry.maskH !== maskH)
-          this._qsBlurMask.setResolution(maskW, maskH);
-        if (geometry.cornerRadius !== cornerRadius)
-          this._qsBlurMask.setCornerRadius(cornerRadius);
-        if (geometry.feather !== feather)
-          this._qsBlurMask.setFeather(feather);
-        geometry.maskW = maskW;
-        geometry.maskH = maskH;
-        geometry.cornerRadius = cornerRadius;
-        geometry.feather = feather;
-      }
-
-      // Sync the clone geometry (clipBox/fbo/bgClone + window clones) so the
-      // ACTOR-mode blur shows the real desktop/windows behind the menu.
-      let clipBox = this._qsBlurClipBox;
-      let fboContainer = this._qsBlurFboContainer;
-      let bgClone = this._qsBlurBgClone;
-      if (clipBox && fboContainer && bgClone) {
-        syncBackdropClone(bgClone);
-        // Transitions on these actors are cleared once when the animation
-        // starts, not per frame: this runs on every tick while the menu fades,
-        // where there is never a running transition left to cancel.
-        //
-        // fboContainer is allocated at the menu size divided by the backdrop
-        // downscale factor and scaled back up by it, which is what makes
-        // ShellBlurEffect allocate and blur a smaller buffer (it sizes the
-        // buffer from the actor's untransformed allocation). Both sizes are kept
-        // fractional so the upscaled result lands exactly on the clip box: a
-        // sub-pixel shortfall would leave an unblurred sliver at the edges.
-        let fboScale = this._blurFboScale > 0 ? this._blurFboScale : 1;
-        let fboW = Math.max(1, roundedW / fboScale);
-        let fboH = Math.max(1, roundedH / fboScale);
-        if (geometry.fboW !== fboW || geometry.fboH !== fboH || geometry.fboScale !== fboScale) {
-          clipBox.set_size(roundedW, roundedH);
-          fboContainer.set_size(fboW, fboH);
-          fboContainer.set_pivot_point(0, 0);
-          fboContainer.set_scale(fboScale, fboScale);
-          bgClone.set_size(roundedW, roundedH);
-          geometry.fboW = fboW;
-          geometry.fboH = fboH;
-          geometry.fboScale = fboScale;
-        }
-        if (!geometry.fboInitialized) {
-          clipBox.set_position(0, 0);
-          fboContainer.set_position(0, 0);
-          bgClone.set_scale(1.0, 1.0);
-          geometry.fboInitialized = true;
-        }
-        let bgX = -Math.round(overlayStageX);
-        let bgY = -Math.round(overlayStageY);
-        if (geometry.bgX !== bgX || geometry.bgY !== bgY)
-          bgClone.set_position(bgX, bgY);
-        if (!bgClone.visible) bgClone.show();
-        geometry.bgX = bgX;
-        geometry.bgY = bgY;
-
-        // Rebuild the window clones whenever the set of visible windows changed;
-        // move-only otherwise. Deciding here rather than at the call sites means
-        // every path that re-measures the overlay (animation frames, the settled
-        // reveal, the submenu hand-off) keeps the glass showing the real windows:
-        // an explicit rebuild request always wins, and otherwise the window-set
-        // token catches a restack, a workspace switch or a moved window.
-        //
-        // The signature is a full pass over every window actor, and the clone
-        // children's geometry is expressed in *window* coordinates, so neither
-        // depends on the overlay's own position. During a scaling transition the
-        // only thing that changes between frames is the sheet's rect, so the
-        // whole section is skipped when nothing but the size moved -- that was a
-        // per-frame tax on exactly the frames that can least afford it.
-        let bgMoved = geometry.lastBgX !== bgX || geometry.lastBgY !== bgY;
-        let rectMoved = geometry.lastRectW !== roundedW || geometry.lastRectH !== roundedH;
-        geometry.lastBgX = bgX;
-        geometry.lastBgY = bgY;
-        geometry.lastRectW = roundedW;
-        geometry.lastRectH = roundedH;
-
-        let windowActors = frameWindowActors ?? global.get_window_actors();
-        let backdropSig = this._backdropWindowSignature(windowActors);
-        let setChanged = backdropSig !== this._qsBlurCloneSig;
-        let rebuildClones = rebuildWindowClones || setChanged;
-        // Always move the container (it tracks the background offset) but only
-        // re-seat the children when the window set or the offset actually moved.
-        if (rebuildClones || bgMoved || rectMoved || frameWindowActors === null)
-          this._syncQsBlurOverlayWindowClones(-bgX, -bgY, windowActors, rebuildClones);
-        if (rebuildClones) this._qsBlurCloneSig = backdropSig;
-      }
-    } catch (e) {}
   }
 
   // The menu-level glass actor and its LiquidEffect were removed, so there is
@@ -3785,7 +2723,6 @@ export class QuickSettingsManager {
     // frames pick up any rebuild that is genuinely needed, while the glass is
     // still fully transparent.
     try { this._syncCardBackings(false, false); } catch (e) {}
-    try { this._syncBlurOverlayGeometry(null, false); } catch (e) {}
 
     anim.start(true);
     return true;
@@ -3793,9 +2730,6 @@ export class QuickSettingsManager {
 
   _onAnimationStart(opening: boolean) {
     this._isAnimating = true;
-    if (REDUCE_BLUR_DURING_TRANSITION) {
-      try { this._setTransitionBlurReduced(true); } catch (e) {}
-    }
   }
 
   /**
@@ -3809,50 +2743,10 @@ export class QuickSettingsManager {
   }
 
   _onAnimationFrameImpl(scale: number, opacity: number, opening: boolean) {
-    // The backdrop is painted from the first frame of the transition, with the
-    // same opacity the content has at that moment, so the blur and the glass
-    // fade in together rather than the blur arriving once the popup has stopped
-    // moving. See _overlayFadeFactor for why the old scale-based gate is gone.
-    if (this._qsBlurOverlay) {
-      const overlayOpacity = this._overlayFadeFactor(scale, opening) * opacity;
-      if (overlayOpacity > 0) {
-        if (!this._qsBlurOverlay.visible) this._qsBlurOverlay.show();
-        if (this._qsBlurOverlay.opacity !== overlayOpacity) this._qsBlurOverlay.opacity = overlayOpacity;
-        try { this._syncBlurOverlayGeometry(null, false); } catch (e) {}
-      } else {
-        this._qsBlurOverlay.opacity = 0;
-        this._qsBlurOverlay.hide();
-      }
-    }
-
-    // The window-set token already says when the clones stop being valid (a
-    // restack, a resize, a workspace switch), and a backing with no clones yet
-    // always builds (see _syncCardBackings). Forcing a rebuild on the leading
-    // frames therefore only redid work the move-only sync already does -- it
-    // rebuilt every clone's geometry mid-animation, and the relayout that
-    // follows is the 50-80ms frame the open kept stalling on. Let the token
-    // decide.
-    try { this._syncCardBackings(false, true, null, false); } catch (e) {}
-  }
-
-  /**
-   * How much of the whole-popup backdrop blur to paint at this point in a
-   * transition.
-   *
-   * This used to hold the backdrop back until the stamp was essentially done
-   * (scale <= 1.02) and then ramp it in over the tail of the fade, to keep the
-   * largest offscreen pass off the expensive early frames. Measurement never
-   * supported that: disabling the backdrop entirely did not move the worst frame
-   * (60.6ms mean worst frame with it, 73.9ms without, same build and load), so
-   * the gate bought nothing and only made the blur visibly arrive after the menu
-   * had stopped moving.
-   *
-   * It now rides the same opacity ramp as the content from the first frame, which
-   * is exactly how the clock menu's single glass sheet behaves (UIManager writes
-   * the same animated opacity to the glass and to the content).
-   */
-  _overlayFadeFactor(_scale: number, _opening: boolean): number {
-    return 1;
+    // The one glass re-measures itself against the animated geometry each
+    // frame; its opacity is derived from the cards' paint opacity, so it fades
+    // in lockstep with the content from the first frame.
+    try { this._syncCardBackings(); } catch (e) {}
   }
 
   _onAnimationSettled(opening: boolean) {
@@ -3861,9 +2755,6 @@ export class QuickSettingsManager {
 
   _onAnimationSettledImpl(opening: boolean) {
     this._isAnimating = false;
-    if (REDUCE_BLUR_DURING_TRANSITION) {
-      try { this._setTransitionBlurReduced(false); } catch (e) {}
-    }
 
     if (opening) {
       // Land on exactly 1.0 / 255: settling on 0.9987 leaves the whole menu
@@ -3874,11 +2765,6 @@ export class QuickSettingsManager {
         this._applyMenuOffsets();
         this._syncGeometry();
         this._syncCardBackings(false, true, null, true);
-        // The overlay is on screen for the whole transition now, so land its
-        // clone set and geometry exactly on the settled rect. Forced rather than
-        // token-driven: this is the one point in the open where a full, settled
-        // rebuild is guaranteed to be cheap.
-        this._syncBlurOverlayGeometry(null, true);
       } catch (e) {}
       this._wakeCardBackingSync();
       // Safety net for widgets the shell added while the menu was opening; it
@@ -3900,11 +2786,6 @@ export class QuickSettingsManager {
         this._stampActor.set_scale(1, 1);
       } catch (e) {}
     }
-    if (this._qsBlurOverlay) {
-      this._qsBlurOverlay.opacity = 0;
-      this._qsBlurOverlay.hide();
-    }
-
     // Keep the card glass alive but invisible. It used to be destroyed here and
     // rebuilt on the next open, which cost ~40ms of synchronous work on the
     // open frame -- the stall that made the spring teleport.
@@ -3964,12 +2845,12 @@ export class QuickSettingsManager {
 
   /** Hides every card backing without tearing it (or its shader) down. */
   _hideCardBackings() {
-    for (let backing of this._cardBackings.values()) {
-      try {
-        backing.hide();
-        backing.opacity = 0;
-      } catch (e) {}
-    }
+    const glass = this._glass;
+    if (!glass) return;
+    try {
+      glass.hide();
+      glass.opacity = 0;
+    } catch (e) {}
   }
 
   /**
@@ -4078,21 +2959,12 @@ export class QuickSettingsManager {
       }
     }
 
-    // Destroy the fullscreen blur overlay
-    if (this._qsBlurOverlay) {
-      try { this._qsBlurOverlay.destroy(); } catch (e) {}
-      this._qsBlurOverlay = null;
-      this._qsBlurOverlayEffect = null;
-      this._qsBlurMask = null;
-      this._qsBlurClipBox = null;
-      this._qsBlurFboContainer = null;
-      this._qsBlurHalfBox = null;
-      this._qsBlurBgClone = null;
-      this._qsBlurWindowClonesContainer = null;
-      this._qsBlurWindowClones.clear();
-      // The clones are gone with the overlay, so the token no longer describes
-      // anything that exists and the next sync must build from scratch.
-      this._qsBlurCloneSig = '';
+    // Tear down the one grid glass (the caller's effect is going away).
+    const glass = this._glass;
+    this._glass = null;
+    if (glass) {
+      try { glass.cleanup(); } catch (e) {}
+      try { if (isActorValid(glass)) glass.destroy(); } catch (e) {}
     }
 
     this._stableBaseW = undefined;
@@ -4136,12 +3008,7 @@ export class QuickSettingsManager {
     // on the same frames. `animate` is kept for API compatibility but behaves
     // like the instant path: overlapping eases were the main jitter source.
     try { this.menu.close(false); } catch (e) {}
-    try { this._setTransitionBlurReduced(false); } catch (e) {}
-    if (this._qsBlurOverlay) {
-      try { this._qsBlurOverlay.remove_all_transitions(); } catch (e) {}
-      this._qsBlurOverlay.opacity = 0;
-      this._qsBlurOverlay.hide();
-    }
+    this._hideCardBackings();
     try {
       if (this._stampActor) {
         this._stampActor.remove_all_transitions();
@@ -4161,7 +3028,6 @@ export class QuickSettingsManager {
     void pop;
     this._isSubmenuTransitioning = false;
     this._isAnimating = false;
-    try { this._setTransitionBlurReduced(false); } catch (e) {}
     this._anim?.finish(true);
     try {
       if (this.menu && this.menu.actor) {
@@ -4175,9 +3041,6 @@ export class QuickSettingsManager {
         this._stampActor.set_scale(1.0, 1.0);
         this._stampActor.opacity = 255;
       }
-      if (this._qsBlurOverlay) {
-        this._qsBlurOverlay.remove_all_transitions();
-      }
     } catch (e) {}
     // Unfreeze upfront: layout settled hidden behind the fade, so live
     // tracking is exact from the reveal frame. Bumps the generation to
@@ -4189,14 +3052,6 @@ export class QuickSettingsManager {
     // entrance — the ease drives move-only syncs and finishReturn restarts it.
     try { this._stopCardBackingSync(); } catch (e) {}
     try { this._syncCardBackings(false, true, null, true); } catch (e) {}
-    // ...and the overlay geometry is final before it fades in (QS itself does
-    // not move during the entrance, so no per-frame overlay sync is needed).
-    if (this._qsBlurOverlay) {
-      try {
-        this._syncBlurOverlayGeometry(null, true);
-      } catch (e) {}
-      this._qsBlurOverlay.show();
-    }
 
     if (!animated || !this.menu?.isOpen) {
       try {
@@ -4206,9 +3061,6 @@ export class QuickSettingsManager {
         if (this.animActor) {
           this.animActor.opacity = 255;
           this._applyMenuOffsets();
-        }
-        if (this._qsBlurOverlay) {
-          this._qsBlurOverlay.opacity = 255;
         }
       } catch (e) {}
       // Resume the idle backing loop (stopped for the hidden phase above).
@@ -4228,9 +3080,6 @@ export class QuickSettingsManager {
       this.menu.actor.opacity = 0;
       this.animActor.translation_y = baseY + QS_RETURN_RISE_PX;
       this.animActor.opacity = 255;
-      if (this._qsBlurOverlay) {
-        this._qsBlurOverlay.opacity = 0;
-      }
     } catch (e) {}
 
     let finishReturn = () => {
@@ -4241,9 +3090,6 @@ export class QuickSettingsManager {
         this.menu.actor.opacity = 255;
         this.animActor.translation_y = baseY;
         this.animActor.opacity = 255;
-        if (this._qsBlurOverlay) {
-          this._qsBlurOverlay.opacity = 255;
-        }
         this._syncCardBackings(false, false);
       } catch (e) {}
       this._wakeCardBackingSync();
@@ -4272,13 +3118,6 @@ export class QuickSettingsManager {
         duration: QS_RETURN_DURATION_MS,
         mode: Clutter.AnimationMode.EASE_OUT_QUAD,
       });
-      if (this._qsBlurOverlay) {
-        (this._qsBlurOverlay as any).ease({
-          opacity: 255,
-          duration: QS_RETURN_DURATION_MS,
-          mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-        });
-      }
     } catch (e) {
       finishReturn();
       return;
@@ -4326,11 +3165,7 @@ export class QuickSettingsManager {
     this._frozenUnfreezeGen++;
 
     try {
-      if (this._qsBlurOverlay) {
-        this._qsBlurOverlay.remove_all_transitions();
-        this._qsBlurOverlay.opacity = 0;
-        this._qsBlurOverlay.hide();
-      }
+      this._hideCardBackings();
       this.menu.actor.opacity = 255;
       this.animActor.opacity = 255;
       this.animActor.hide?.();
@@ -4355,10 +3190,7 @@ export class QuickSettingsManager {
       this.menu.actor.opacity = 0;
       this.menu.actor.show?.();
     } catch (e) {}
-    if (this._qsBlurOverlay) {
-      this._qsBlurOverlay.opacity = 0;
-      this._qsBlurOverlay.hide();
-    }
+    this._hideCardBackings();
     // Card effects were kept alive (frozen) across the submenu, but re-apply
     // synchronously to catch anything the shell rebuilt while hidden, and
     // force layout so borrowed sliders report real allocation on the settle
@@ -4401,7 +3233,6 @@ export class QuickSettingsManager {
     try {
       this.menu.actor.remove_all_transitions?.();
       this._stampActor?.remove_all_transitions?.();
-      this._qsBlurOverlay?.remove_all_transitions?.();
     } catch (e) {}
     this._isAnimating = false;
     this._anim?.finish(false);
@@ -4432,11 +3263,7 @@ export class QuickSettingsManager {
       this.animActor.opacity = 0;
       this.animActor.hide?.();
     } catch (e) {}
-    if (this._qsBlurOverlay) {
-      this._qsBlurOverlay.remove_all_transitions();
-      this._qsBlurOverlay.opacity = 0;
-      this._qsBlurOverlay.hide();
-    }
+    this._hideCardBackings();
     try {
       this.menu.actor.opacity = 0;
       this.menu.actor.hide?.();
