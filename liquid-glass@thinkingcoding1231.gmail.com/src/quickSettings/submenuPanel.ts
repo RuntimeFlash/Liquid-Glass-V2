@@ -29,6 +29,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { LiquidEffect } from './liquidEffect.js';
 import { UnpickableActor, UnpickableClone, createBackdropClone, syncBackdropClone } from './qsUtils.js';
 import { SubmenuAnimation, SCRIM_TARGET_OPACITY } from './submenuAnimation.js';
+import { markOpenTrigger } from '../diagnostics/openLag.js';
 
 /** Transparent padding outside the glass, so the shader is never clipped. */
 export const SHADER_PADDING = 20;
@@ -204,7 +205,7 @@ export class SubmenuPanel {
       getGlass: () => (this._destroyed ? null : this._glass),
       getScrim: () => (this._destroyed ? null : this._scrim),
       isAlive: () => !this._destroyed,
-      onStart: () => {},
+      onStart: () => markOpenTrigger('submenu-open'),
       onSettled: (opening) => this._onSettled(opening),
       onFrame: () => {},
     });

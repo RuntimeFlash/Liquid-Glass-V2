@@ -6,6 +6,7 @@ import { setAdaptiveColorMode, getAdaptiveColorMode } from '../animation/colors.
 import { setWindowActorRescueMode, getWindowActorRescueMode } from '../actors/allocation.js';
 import { diagnosticLog } from './logging.js';
 import { startGlassMonitor, stopGlassMonitor, isGlassMonitorRunning, setGlassMonitorLabel } from './monitor.js';
+import { setOpenLagEnabled, isOpenLagEnabled } from './openLag.js';
 // Every live glass registers here so its last frame can be inspected from
 // Looking Glass through global._lgGlass (installed by enable(), removed by
 // disable()).
@@ -307,6 +308,11 @@ function createDebugApi() {
             return report('monitor stopped');
         },
         monitorRunning: () => isGlassMonitorRunning(),
+        // Trigger-to-first-paint latency for menu opens/closes: logs one line per
+        // transition plus the frame cadence that follows it. Unlike a frame
+        // interval this cannot absorb idle time.
+        openLag: (on) => report(`open lag trace ${setOpenLagEnabled(on) ? 'ON' : 'off'}`),
+        openLagRunning: () => isOpenLagEnabled(),
         monitorLabel: (label) => setGlassMonitorLabel(label),
         blurRect: (enabled) => report(`blur sub-rect ${onOff(enabled)} on ${onEveryGlass(fx => fx.setBlurRectEnabled(enabled))} instance(s)`),
         compositeRect: (enabled) => report(`composite sub-rect ${onOff(enabled)} on ${onEveryGlass(fx => fx.setCompositeRectEnabled(enabled))} instance(s)`),
