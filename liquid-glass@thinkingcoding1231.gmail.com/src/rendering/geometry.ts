@@ -47,8 +47,8 @@ export class GlassGeometry {
   /**
    * The rect [x, y, w, h] (shader space) the composite has to cover, or null
    * for the whole actor. glass.frag draws no shadow beyond
-   * min(shadow_radius, max(shadow_max_radius, 5)) from the body, and none in
-   * multi-region mode.
+   * min(shadow_radius, max(shadow_max_radius, 5)) from the body. In
+   * multi-region mode that is the union of every region's own shadow.
    */
   compositeRect(): number[] | null {
     if (!this.compositeEnabled) return null;
@@ -67,9 +67,9 @@ export class GlassGeometry {
     const shadowMax = Math.max(this._uniforms.get('shadow_max_radius') ?? 0, 5);
     const shadowRadius = Math.max(this._uniforms.get('shadow_radius') ?? 0, 0);
     const shadowIntensity = this._uniforms.get('shadow_intensity') ?? 0;
-    const reach = (this.multiRegion || !(shadowIntensity > 0))
-      ? 0
-      : Math.min(shadowRadius, shadowMax);
+    const reach = (shadowIntensity > 0)
+      ? Math.min(shadowRadius, shadowMax)
+      : 0;
 
     // The feather widens the body; the rim and AO lie inside it.
     const feather = Math.max(this._uniforms.get('edge_smoothing') ?? 0, 0.75);

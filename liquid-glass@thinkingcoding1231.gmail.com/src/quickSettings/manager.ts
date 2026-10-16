@@ -27,6 +27,9 @@ const ENABLE_QS_CARD_SHADER = true;
 const QS_CARD_SHADER_PADDING = 20;
 // Fallback corner radius for the whole-grid glass when the setting is unset.
 const QS_DEFAULT_CORNER_RADIUS = 18;
+// Slack added to a shadow's reach so the fade never lands exactly on the actor
+// edge, matching the application glass margin.
+const SHADOW_MARGIN_HEADROOM = 20;
 
 // Drives the verbose [LG-*] animation tracing. Off by default: the template
 // literals below were built on every open/close stop regardless of whether
@@ -142,6 +145,11 @@ export class QuickSettingsManager {
   private _lastBgY: number | undefined;
 
   private _cornerRadius: number = 0;
+  // Room the grid's drop shadow needs outside the padded region rects, derived
+  // from the same shadow-radius/shadow-intensity settings the other glass
+  // surfaces honour. Zero while the shadow is off, so the actor is not grown
+  // for nothing.
+  private _shadowRoom: number = 0;
 
   private _animationInterval: number = 16;
   private _openScale: number = 1.08;
@@ -378,6 +386,16 @@ export class QuickSettingsManager {
       this._glass?.setBlurRadius(this._settings.get_int('quick-settings-blur-radius'));
     });
 
+    // The drop shadow is shared with every other glass surface, so the grid
+    // follows the same two settings.
+    connectSetting('shadow-radius', () => {
+      this._applyShadowRoom();
+    });
+
+    connectSetting('shadow-intensity', () => {
+      this._applyShadowRoom();
+    });
+
     connectSetting('quick-settings-corner-radius', () => {
       this._cornerRadius = this._settings.get_double('quick-settings-corner-radius');
       this._glass?.setCornerRadius(this._cornerRadius || QS_DEFAULT_CORNER_RADIUS);
@@ -552,6 +570,8 @@ export class QuickSettingsManager {
     glass.setTintStrength(this._settings.get_double('quick-settings-tint-strength'));
     glass.setBlurRadius(this._settings.get_int('quick-settings-blur-radius'));
     glass.setCornerRadius(this._cornerRadius || QS_DEFAULT_CORNER_RADIUS);
+    this._shadowRoom = this._computeShadowRoom();
+    glass.setShadowMaxRadius(this._shadowRoom);
     glass.set_size(2, 2);
     glass.opacity = 0;
     glass.hide();
@@ -564,6 +584,27 @@ export class QuickSettingsManager {
 
     this._glass = glass;
     return glass;
+  }
+
+  // How far each region's drop shadow reaches past its body, or 0 when the
+  // shadow is off. The shader caps the shadow at `shadow_max_radius`, so the
+  // actor only has to offer this much room.
+  _computeShadowRoom(): number {
+    const radius = this._settings.get_double('shadow-radius');
+    const intensity = this._settings.get_double('shadow-intensity');
+    if (!(radius > 0) || !(intensity > 0)) return 0;
+    return Math.ceil(radius) + SHADOW_MARGIN_HEADROOM;
+  }
+
+  // Pushes a changed shadow setting into the glass. The margin is part of the
+  // geometry the sync builds, so the next sync resizes the actor around it.
+  _applyShadowRoom() {
+    const room = this._computeShadowRoom();
+    if (room === this._shadowRoom) return;
+
+    this._shadowRoom = room;
+    try { this._glass?.setShadowMaxRadius(room); } catch (e) {}
+    try { this._wakeCardBackingSync(); } catch (e) {}
   }
 
   // No per-card actor exists any more (one multi-region glass draws them all),
@@ -884,12 +925,15 @@ export class QuickSettingsManager {
     if (regions.length > 16)
       this._logger.log(`[Liquid Glass] Quick Settings has ${regions.length} cards; only the first 16 get glass regions.`);
 
-    // Multi-region glass draws no shadow, so the actor only has to cover the
-    // union of the padded regions.
-    const bboxX = Math.floor(minX);
-    const bboxY = Math.floor(minY);
-    const bboxW = Math.max(1, Math.ceil(maxX) - bboxX);
-    const bboxH = Math.max(1, Math.ceil(maxY) - bboxY);
+    // Every region draws its own drop shadow, which reaches past the region
+    // rect. The actor clips at its allocation, so it has to cover the shadow as
+    // well: the shader's `padding` inset already spends `pad` of the reach, and
+    // the rest is added here.
+    const shadowMargin = Math.max(0, this._shadowRoom - pad);
+    const bboxX = Math.floor(minX) - shadowMargin;
+    const bboxY = Math.floor(minY) - shadowMargin;
+    const bboxW = Math.max(1, Math.ceil(maxX) + shadowMargin - bboxX);
+    const bboxH = Math.max(1, Math.ceil(maxY) + shadowMargin - bboxY);
 
     const relative: GlassRegion[] = regions.map(r => ({
       x: r.x - bboxX, y: r.y - bboxY, w: r.w, h: r.h,

@@ -99,7 +99,8 @@ uniform float dock_h;
 
 // Multi-region mode, for Quick Settings' toggle-button glass: up to
 // MAX_GLASS_REGIONS separate rounded rects drawn from the same blurred
-// texture. The regions must not overlap, and they get no drop shadow.
+// texture. The regions must not overlap, and each one gets its own drop
+// shadow, so a grid of cards reads at the same depth as a single sheet.
 #define MAX_GLASS_REGIONS 16
 uniform float multi_region_mode; // 0 = the single dock_* rect, 1 = regions
 uniform float region_count;
@@ -641,9 +642,12 @@ void main() {
     // Two early exits for the regions where everything below collapses to a
     // constant. Together they cover most of every surface.
 
-    // Beyond the shadow's reach nothing is drawn. Multi-region mode has no
-    // shadow, so there it starts right at the edge.
-    float shadowReach = (multi_region_mode > 0.5) ? 0.0 : max(shadow_max_radius, 5.0);
+    // Beyond the shadow's reach nothing is drawn: past it the drop shadow has
+    // faded out and every other term lies inside the glass body. With the
+    // shadow off (radius 0 or intensity 0) only the feather matters, so the
+    // band stays a couple of pixels wide.
+    float shadowEnabled = shadow_intensity * smoothstep(0.0, 0.75, shadow_radius);
+    float shadowReach = (shadowEnabled > 0.0) ? max(shadow_max_radius, 5.0) : 0.0;
     if (early_exit_enabled > 0.5 && debug_view < 0.5 && d >= max(shadowReach, edgeFeather)) {
         cogl_color_out = vec4(0.0);
         return;
@@ -754,10 +758,6 @@ void main() {
     if (shadowAlpha > 0.0)
         shadowAlpha = max(shadowAlpha + ditherLSB(pixel_coord + vec2(37.0, 17.0)), 0.0);
 
-    if (multi_region_mode > 0.5) {
-        shadowAlpha = 0.0;
-    }
-
     if (debug_view > 0.5) {
         // Mode 1 lifts faint values (a default shadow peaks near 0.29) so they
         // do not read as black; 0 stays 0.
@@ -768,6 +768,20 @@ void main() {
     }
 
     vec3 shadowColor = vec3(0.03, 0.04, 0.08);
+
+    // Past the feather the glass is fully transparent, so the rim, the AO, the
+    // refraction and the backdrop sampling all cancel: the pixel is the drop
+    // shadow alone. Emitting that here skips the gradient, the normal, the
+    // displacement and the texture taps, which is what makes the shadow band
+    // around a surface affordable -- and it is why a multi-region grid can
+    // afford a shadow per card. insideMask is exactly 0 there, so the full
+    // path below would produce this same colour.
+    if (outsideMask >= 1.0) {
+        vec3 shadowRgb = shadowColor * shadowAlpha;
+        shadowRgb = max(shadowRgb + ditherLSB(pixel_coord) * shadowAlpha, 0.0);
+        cogl_color_out = vec4(shadowRgb, shadowAlpha) * cogl_color_in;
+        return;
+    }
 
 #ifdef LG_SHAPE_TEXTURE
     vec2 gradH = shapeHeightGradient(local_pos, box_size, max_z, resolution);

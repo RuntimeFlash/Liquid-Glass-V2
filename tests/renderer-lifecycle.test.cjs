@@ -51,7 +51,10 @@ test('geometry clipping remains conservative for shadows, blur reach and multipl
   assert.equal(blur[3] % GlassGeometry.BLUR_RECT_QUANTUM, 0);
   geometry.multiRegion = true;
   geometry.regions = [[500, 400, 100, 80], [800, 500, 80, 100]];
-  assert.deepEqual(geometry.compositeRect(), [506, 406, 368, 188], 'multi-region glass does not paint a drop shadow');
+  assert.deepEqual(geometry.compositeRect(), [486, 386, 408, 228], 'multi-region glass grows its clip to cover every region\'s drop shadow');
+  uniforms.set('shadow_intensity', 0);
+  assert.deepEqual(geometry.compositeRect(), [506, 406, 368, 188], 'with the shadow off the multi-region clip is the union alone');
+  uniforms.set('shadow_intensity', 1);
   uniforms.set('debug_view', 1);
   assert.equal(geometry.compositeRect(), null);
   geometry.blurEnabled = false;

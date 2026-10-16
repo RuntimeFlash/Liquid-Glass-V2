@@ -25,6 +25,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { LiquidEffect } from './liquidEffect.js';
+import { hexToColorArray } from '../animation/colors.js';
 import { UnpickableActor, UnpickableClone, createBackdropClone, syncBackdropClone } from './qsUtils.js';
 import { SubmenuAnimation } from './submenuAnimation.js';
 import { markOpenTrigger } from '../diagnostics/openLag.js';
@@ -252,7 +253,7 @@ export class SubmenuPanel {
         effect.setPadding(SHADER_PADDING);
         effect.setCornerRadius(CORNER_RADIUS);
         effect.setIsDock(false);
-        const tint = this._manager._hexToColorArray(this._manager._settings.get_string('quick-settings-tint-color'));
+        const tint = hexToColorArray(this._manager._settings.get_string('quick-settings-tint-color'));
         effect.setTintColor(...tint);
         effect.setTintStrength(this._manager._settings.get_double('quick-settings-tint-strength'));
         this._glass.add_effect(effect);

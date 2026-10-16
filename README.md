@@ -114,7 +114,7 @@ The effect can be enabled or disabled per UI element on the **Effects** page. In
 | **Application Icons** | The icons in Dash to Dock (the Show Apps button too), in the launcher's results and in the overview's app grid, redrawn as glass plates under a one-color symbol, as in macOS 26 and iOS 26. See [Glass Icons](#glass-icons). Off by default. |
 | **Calendar & Other Top Bar Menus** | Glass behind the calendar (clock) menu and behind the menus of the other top bar indicators — the keyboard layout and accessibility menus, and the indicators other extensions add, including [ArcMenu](https://gitlab.com/arcmenu/ArcMenu)'s menu and its right-click menu. Each detected menu can be switched off on its own. Menus **grow out of their button**, after [liquid-dom](https://github.com/AndrewPrifer/liquid-dom)'s menu demo: the button's highlight drops out of the button and rounds off into a drop of glass, which is thrown out to where the menu will be — each time with a small push in a random downward direction — and swells into the menu, its items coming up through the glass, seen bent by its rim at first. Closing runs it back: the menu shrinks into a drop that rises into the button, widening into its highlight on the way, and fades once it has become the highlight. Off by default (Appearance → Behavior → "Menus grow from their button"). With that off, a **custom spring animation** (stiffness / damping / mass) scales the menu instead. Also supports **adaptive text coloring**. |
 | **Notifications** | Glass behind notification banners. Supports **adaptive text coloring** and a hide safety margin to avoid flicker while the banner is dismissed. |
-| **Quick Settings** | Draws the panel as a custom grid of glass cards, each mirroring a native quick setting, with a frosted sheet behind the whole menu. Tapping a card that has more to it (Wi-Fi, Bluetooth, power mode, caffeine) opens a floating **submenu** of glass rows — network and device lists, switches and system actions. A **layout editor** (from the menu's edit button) reorders, resizes and hides cards and saves the layout. Supports spring animation and adaptive text coloring. |
+| **Quick Settings** | Draws the panel as a custom grid of glass cards, each mirroring a native quick setting, over one shared sheet of glass behind the grid, with a drop shadow on every card. Tapping a card that has more to it (Wi-Fi, Bluetooth, power mode, caffeine) opens a floating **submenu** of glass rows — network and device lists, switches and system actions. A **layout editor** (from the menu's edit button) reorders, resizes and hides cards and saves the layout. Supports spring animation and adaptive text coloring. |
 | **OSD** | Glass behind the on-screen displays (volume, brightness, and so on), with adaptive text coloring. |
 | **Application Windows** | Glass behind application windows, with a **window content opacity** slider so the glass shows through the window itself. Applies either to selected applications, or to all windows minus exclusions. Both lists are filled from a live picker of your currently open windows, so there is no need to look up `WM_CLASS` values by hand. |
 
@@ -215,6 +215,7 @@ The lens acts over a fixed band (22 px) along the edge, whatever the corner radi
 The drop shadow anchors the glass on light backgrounds (a white wallpaper, for example) so it does not visually disappear.
 - **Shadow radius** - How far the shadow extends past the glass edge. `0` disables it.
 - **Shadow strength** - How dark the shadow is.
+- Each Quick Settings card casts its own shadow from the same settings, so the grid reads at the same depth as a single sheet.
 
 A separate ambient-occlusion style darkening sits just inside the glass edge, independent of the outer drop shadow.
 - **Inner shading** - How dark the inner band gets. With the edge light on, the darkening falls only where the edge light does not (the edges that run along the light direction), as on macOS.
@@ -290,6 +291,7 @@ A significant part of this codebase was written with the help of AI coding assis
 - [x] Snapping guides for moving the clock and the widgets
 - [x] Glass application icons in the dock and the launcher (tinted, mono, clear)
 - [x] Glass application icons in the app grid
+- [x] Drop shadow on every Quick Settings grid card
 
 ### Next
 - [ ] Publish to extensions.gnome.org (not approved yet)
