@@ -14,24 +14,29 @@ function addMotion(group, controls, surface) {
   const key = `enable-${surface}-animation`;
   const toggle = controls.toggle(group, 'Animations', key);
   const branch = new Branch(toggle);
-  const morphToggle = branch.add(controls.toggle(group, 'Grow from the button', `${surface}-grow-from-button`,
-    'The glass leaves the button as a drop and stretches into the menu'));
-  // Spring constants and intervals mean their number; no slider.
-  const morphBranch = new ToggleBranch(morphToggle, 2);
-  morphBranch.add(controls.number(group, 'Morph speed', [`${surface}-morph-speed`], 0.1, 3, 0.1, '', {slider: false}), 0);
-  for (const row of addNumbers(group, controls, SPRING, `${surface}-`, false).values()) morphBranch.add(row, 1);
-  const updateMorph = () => {
-    morphBranch.switch = controls.settings.get_boolean(`${surface}-grow-from-button`) ? 0 : 1;
-  };
-  const updateMotion = () => {
-    const on = controls.settings.get_boolean(key);
-    branch.enabled = on;
-    morphBranch.enabled = on;
-    updateMorph();
-  };
-  controls.watch([key], updateMotion);
-  controls.watch([`${surface}-grow-from-button`], updateMorph);
-  updateMotion();
+  if (surface !== 'quick-settings') {
+    const morphToggle = branch.add(controls.toggle(group, 'Grow from the button', `${surface}-grow-from-button`,
+      'The glass leaves the button as a drop and stretches into the menu'));
+    // Spring constants and intervals mean their number; no slider.
+    const morphBranch = new ToggleBranch(morphToggle, 2);
+    morphBranch.add(controls.number(group, 'Morph speed', [`${surface}-morph-speed`], 0.1, 3, 0.1, '', {slider: false}), 0);
+    for (const row of addNumbers(group, controls, SPRING, `${surface}-`, false).values()) morphBranch.add(row, 1);
+    const updateMorph = () => {
+      morphBranch.switch = controls.settings.get_boolean(`${surface}-grow-from-button`) ? 0 : 1;
+    };
+    const updateMotion = () => {
+      const on = controls.settings.get_boolean(key);
+      branch.enabled = on;
+      morphBranch.enabled = on;
+      updateMorph();
+    };
+    controls.watch([key], updateMotion);
+    controls.watch([`${surface}-grow-from-button`], updateMorph);
+    updateMotion();
+  } else {
+    for (const row of addNumbers(group, controls, SPRING, `${surface}-`, false).values()) branch.add(row);
+    controls.watch([key], () => { branch.enabled = controls.settings.get_boolean(key); });
+  }
 }
 
 function addOutline(group, controls, surface) {

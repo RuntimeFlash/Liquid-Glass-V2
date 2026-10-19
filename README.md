@@ -138,7 +138,7 @@ Where it is supported, the extension samples the brightness of what is behind th
 
 The native quick settings grid is hidden and replaced with glass cards, one per quick setting, laid out from a saved JSON layout. Wide and single cards, sliders (volume, brightness, microphone) and toggles are all drawn as glass, and each card mirrors the state and activation of the native control behind it. Wi-Fi, Bluetooth, power mode and caffeine cards open a floating submenu — a separate glass panel listing networks, devices or actions with switches, spinners and status text — and the panel animates between the grid and the submenu. The menu's edit button opens a layout editor to reorder, resize or hide cards.
 
-Corner radius, X/Y offset, glass expand, tint and the open animation apply to this UI, and adaptive text coloring keeps labels readable over the glass. While animations are on, **Grow from the button** (on by default) sends the glass out of the Quick Settings button as a drop and stretches it into the grid, with an adjustable **Morph speed**; with it off, the panel stamps open using the starting **Open scale**.
+Corner radius, X/Y offset, glass expand, tint and the open animation (including the starting **Open scale**) apply to this UI, and adaptive text coloring keeps labels readable over the glass.
 
 
 ### Using it with Blur my Shell

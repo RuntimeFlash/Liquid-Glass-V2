@@ -12,22 +12,12 @@ import { CustomQuickSettingsRenderer } from './customQuickSettings.js';
 import { QuickSettingsStampAnimation } from './quickSettingsAnimation.js';
 import { isActorValid } from '../actors/lifecycle.js';
 import { BackdropGlass } from '../rendering/backdropGlass.js';
-import { ContentLens } from '../rendering/contentLens.js';
 import { hexToColorArray, adaptiveColorTweener } from '../animation/colors.js';
-import { MenuMorphMotion } from '../animation/menuMorph.js';
-import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from '../animation/frameTicker.js';
 // The card-backing sync's timer period: short while something is changing,
 // longer once the menu has been idle (the syncs themselves stay 750ms apart
 // then; the timer only has to notice an animation ending or the menu closing).
 const CARD_BACKING_ACTIVE_MS = 16;
 const CARD_BACKING_IDLE_WAKE_MS = 100;
-// The morph from the Quick Settings button to the grid, after the top bar menus.
-const MORPH_WAIT_FRAMES = 30;
-const BOXPOINTER_EASED = ['opacity', 'translation-x', 'translation-y', 'scale-x', 'scale-y'];
-const BOXPOINTER_HOLD_MS = 10000;
-const CONTENT_LENS = 'liquid-glass-content-lens';
-const SOFT_REFRACTION = 0.3;
-const SOFT_BLUR_RADIUS = 0;
 // Transparent padding outside the glass area.
 // This prevents the shader distortion or rounded corners from being clipped by the actor bounds.
 const SHADER_PADDING = 20;
@@ -99,10 +89,6 @@ export class QuickSettingsManager {
     // it is running.
     _anim = null;
     _enableAnimation;
-    _growFromButton = true;
-    _morph = null;
-    _morphTickId = 0;
-    _morphSpeed = 1.0;
     // Mirrors _anim.isRunning for the sync paths that only need to know whether
     // geometry is being driven by the transition.
     _isAnimating = false;
@@ -208,10 +194,6 @@ export class QuickSettingsManager {
         // parameterise it are first read. Until then there is no transition to run.
         this._anim = null;
         this._enableAnimation = true;
-        this._growFromButton = true;
-        this._morph = null;
-        this._morphTickId = 0;
-        this._morphSpeed = 1.0;
         this._contrastSampler = new StageContrastSampler(logger);
         this._adaptiveTimerId = 0;
         this._adaptiveInFlight = false;
@@ -280,8 +262,6 @@ export class QuickSettingsManager {
             return;
         this._bindSettings();
         this._enableAnimation = this._settings.get_boolean('enable-quick-settings-animation');
-        this._growFromButton = this._settings.get_boolean('quick-settings-grow-from-button');
-        this._morphSpeed = this._settings.get_double('quick-settings-morph-speed');
         this._openScale = Math.max(1.0, this._settings.get_double('quick-settings-open-scale'));
         if (this._settings.get_boolean('enable-quick-settings-glass')) {
             this._applyEffect();
@@ -318,12 +298,6 @@ export class QuickSettingsManager {
         });
         connectSetting('enable-quick-settings-animation', () => {
             this._enableAnimation = this._settings.get_boolean('enable-quick-settings-animation');
-        });
-        connectSetting('quick-settings-grow-from-button', () => {
-            this._growFromButton = this._settings.get_boolean('quick-settings-grow-from-button');
-        });
-        connectSetting('quick-settings-morph-speed', () => {
-            this._morphSpeed = this._settings.get_double('quick-settings-morph-speed');
         });
         connectSetting('quick-settings-spring-stiffness', () => {
             this._applySpringSettings();
@@ -755,9 +729,6 @@ export class QuickSettingsManager {
     // shader pass are shared, the same architecture as the calendar menu's single
     // sheet and the top bar's island style.
     _syncCardBackingsImpl() {
-        // The morph owns the one glass while it travels; card regions would fight it.
-        if (this._morph)
-            return;
         if (!this.menu?.actor?.mapped && !this._isAnimating)
             return;
         const parent = this.menu?.actor?.get_parent?.() || Main.layoutManager.uiGroup;
@@ -2137,8 +2108,6 @@ export class QuickSettingsManager {
         this._menuXoffset = this._settings.get_int('quick-settings-x-offset');
         this._glassExpand = this._settings.get_int('quick-settings-glass-expand');
         this._animationInterval = this._settings.get_int('quick-settings-animation-interval-ms');
-        this._growFromButton = this._settings.get_boolean('quick-settings-grow-from-button');
-        this._morphSpeed = this._settings.get_double('quick-settings-morph-speed');
         this._adaptiveConfig = {
             ...AdaptiveContrastConfig,
             enabled: this._settings.get_boolean('quick-settings-enable-adaptive-text-color'),
@@ -2270,10 +2239,6 @@ export class QuickSettingsManager {
                 this._stampActor?.remove_all_transitions?.();
             }
             catch (e) { }
-            // The glass goes back into the button as a drop; the stamp fades it
-            // otherwise. Fall back to the stamp when there is nothing to morph.
-            if (this._growFromButton && St.Settings.get().enable_animations && this._startMorph(false))
-                return;
             // Fade the popup out. The stamp leaves the scale alone on close; only the
             // opacity moves, and the glass follows it frame for frame.
             this._anim?.start(false);
@@ -2759,11 +2724,6 @@ export class QuickSettingsManager {
         }
         this._isAnimating = true;
         this._sweepBaselineCardCount = this._cardActors.size;
-        // The glass can leave the Quick Settings button as a drop instead of the
-        // whole popup stamping open. Fall back to the stamp if there is no button
-        // or no glass yet.
-        if (this._growFromButton && St.Settings.get().enable_animations && this._startMorph(true))
-            return true;
         // Stamp first, so the sync below measures the geometry that will actually
         // be painted. prepareOpen() also takes the content to opacity 0, so nothing
         // laid out here can be seen.
@@ -2866,309 +2826,6 @@ export class QuickSettingsManager {
         this._pendingMenuClosedCallback = null;
         this._flushPendingRestoreInput();
         pendingCloseCb?.();
-    }
-
-    // ---- Morph from the Quick Settings button ----------------------------
-    //
-    // The grid's glass can leave the panel button as a drop and stretch into the
-    // menu, the same motion the calendar and other top bar menus use. The one
-    // multi-region glass is switched to a single body for the trip and back to
-    // regions when the morph ends, so the rest of the manager keeps its single
-    // shared capture/blur pipeline.
-    // The Quick Settings button's glass rect, [x, y, w, h] in stage coordinates.
-    _morphButtonRect() {
-        const source = this.menu?.sourceActor ?? Main.panel.statusArea.quickSettings;
-        if (!source || !isActorValid(source) || !source.mapped)
-            return null;
-        const actor = source;
-        const [x, y] = actor.get_transformed_position();
-        const [w, h] = actor.get_transformed_size();
-        if (!Number.isFinite(x) || !Number.isFinite(y) || !(w >= 1) || !(h >= 1))
-            return null;
-        const node = actor.get_theme_node();
-        const [sx, sy] = actor.get_transformed_size().map((v, i) => v / Math.max(i ? actor.height : actor.width, 1));
-        const left = node.get_border_width(St.Side.LEFT) * sx, right = node.get_border_width(St.Side.RIGHT) * sx;
-        const top = node.get_border_width(St.Side.TOP) * sy, bottom = node.get_border_width(St.Side.BOTTOM) * sy;
-        if (w - left - right < 1 || h - top - bottom < 1)
-            return [x, y, w, h];
-        return [x + left, y + top, w - left - right, h - top - bottom];
-    }
-
-    // Where the grid's items are at rest: their stage rect without the morph's
-    // own scale and shift, and the scale the popup puts on them.
-    _morphMenuRest() {
-        if (!this.animActor?.mapped)
-            return null;
-        const a = this.animActor;
-        const [w, h] = a.get_size();
-        const [tx, ty] = a.get_transformed_position();
-        const k = this._stampActor?.get_scale?.()[0] || 1;
-        const x = tx - a.translation_x * k;
-        const y = ty - a.translation_y * k;
-        if (!Number.isFinite(x) || !Number.isFinite(y) || !(w > 1) || !(h > 1))
-            return null;
-        return { x, y, w: w * k, h: h * k, k };
-    }
-
-    // The resting grid's glass body, [x, y, w, h] in stage coordinates.
-    _morphMenuBodyRect() {
-        const rest = this._morphMenuRest();
-        if (!rest)
-            return null;
-        const e = this._glassExpand;
-        return [rest.x - e, rest.y - e, rest.w + e * 2, rest.h + e * 2];
-    }
-
-    _startMorph(open) {
-        const button = this._morphButtonRect();
-        const glass = this._getOrCreateGlass();
-        if (!glass || !button)
-            return false;
-        if (!(glass instanceof BackdropGlass))
-            return false;
-        const prev = this._morph;
-        if (!open && !prev?.motion && !this._morphMenuBodyRect())
-            return false;
-        this._stopMorphTicker();
-        this._anim?.stop();
-        let lens = prev?.lens;
-        if (!lens) {
-            lens = new ContentLens();
-            try {
-                this.animActor.add_effect_with_name(CONTENT_LENS, lens);
-            }
-            catch (e) { }
-        }
-        const blurRadius = this._settings.get_int('quick-settings-blur-radius');
-        if (open && prev && prev.shownBlurRadius !== blurRadius)
-            glass.setBlurRadius(blurRadius);
-        if (open)
-            glass.setAnimationScale(1);
-        let fromFrame = prev?.motion?.frame ?? null;
-        if (!fromFrame && prev) {
-            fromFrame = {
-                body: prev.button, bodyRadius: prev.button[3] / 2, contentScale: 2,
-                contentOpacity: 0, lens: 1, glassOpacity: 1, soften: 0, done: false,
-            };
-        }
-        this._morph = {
-            opening: open, motion: null, button, lens, lastUs: 0, waitFrames: 0,
-            from: fromFrame, velocities: prev?.motion?.velocities ?? null,
-            refraction: this._settings.get_double('glass-displacement-scale'), blurRadius,
-            shownBlurRadius: open ? blurRadius : prev?.shownBlurRadius ?? blurRadius,
-            speed: this._morphSpeed,
-        };
-        this.animActor.remove_all_transitions();
-        this._stampActor?.remove_all_transitions?.();
-        this.animActor.set_pivot_point(0, 0);
-        if (open)
-            this.animActor.opacity = 0;
-        try {
-            glass.setMultiRegionMode(false);
-            glass.setCornerRadius(this._cornerRadius || QS_DEFAULT_CORNER_RADIUS);
-            glass.setShadowMaxRadius(this._shadowRoom);
-            glass.opacity = 0;
-            glass.show();
-        }
-        catch (e) { }
-        if (open) {
-            try {
-                this._applyClipTargetsFor(this._stampActor ?? this.targetActor);
-            }
-            catch (e) { }
-        }
-        this._originProjection = null;
-        this._stopCardBackingSync();
-        this._isAnimating = true;
-        this._morphTickId = addFrameTicker(() => this._stepMorph(), normalizeAnimationIntervalMs(this._animationInterval));
-        return true;
-    }
-
-    _stepMorph() {
-        const m = this._morph;
-        if (!m || !this._glass) {
-            this._morphTickId = 0;
-            return false;
-        }
-        m.button = this._morphButtonRect() ?? m.button;
-        // The popup stays where it opens and stays visible until the morph ends;
-        // its own scale/fade transitions would fight the travelling glass.
-        for (const name of BOXPOINTER_EASED) {
-            const ease = this._stampActor?.get_transition?.(name);
-            if (!ease)
-                continue;
-            if (m.opening)
-                ease.set_from(ease.get_interval().peek_final_value());
-            else
-                ease.set_to(ease.get_interval().peek_initial_value());
-            if (!m.opening && name === 'opacity')
-                ease.set_duration(BOXPOINTER_HOLD_MS);
-        }
-        const menu = this._morphMenuBodyRect();
-        const radius = this._cornerRadius || QS_DEFAULT_CORNER_RADIUS;
-        if (!m.motion) {
-            if (!menu) {
-                // Not laid out yet: hold the glass on the button for a few frames.
-                this._placeMorph({
-                    body: m.button, bodyRadius: m.button[3] / 2, contentScale: 1,
-                    contentOpacity: 0, lens: 0, glassOpacity: 1, soften: 0, done: false,
-                });
-                if (++m.waitFrames < MORPH_WAIT_FRAMES)
-                    return true;
-                this._morphTickId = 0;
-                const opening = m.opening;
-                this._endMorph();
-                this._onAnimationSettledImpl(opening);
-                return false;
-            }
-            m.motion = new MenuMorphMotion(m.opening, m.button, menu, radius);
-        }
-        else {
-            m.motion.retarget(m.button, menu, radius);
-        }
-        const now = GLib.get_monotonic_time();
-        const frame = m.motion.step(m.lastUs ? (now - m.lastUs) / 1e6 : 1 / 60, m.speed);
-        m.lastUs = now;
-        this._placeMorph(frame);
-        if (!frame.done)
-            return true;
-        this._morphTickId = 0;
-        const opening = m.opening;
-        this._endMorph();
-        this._onAnimationSettledImpl(opening);
-        return false;
-    }
-
-    // Converts a stage point to the glass parent's local space.
-    _stageToParent(x, y) {
-        const parent = this._glass?.get_parent?.() ?? null;
-        if (!parent)
-            return [x, y];
-        const p = this._getOriginProjection(parent);
-        if (p.identity)
-            return [x, y];
-        const det = p.xx * p.yy - p.yx * p.xy;
-        if (Math.abs(det) < 1e-6)
-            return [x, y];
-        const dx = x - p.x, dy = y - p.y;
-        return [(p.yy * dx - p.yx * dy) / det, (-p.xy * dx + p.xx * dy) / det];
-    }
-
-    _placeMorph(f) {
-        const glass = this._glass;
-        if (!(glass instanceof BackdropGlass))
-            return;
-        const p = SHADER_PADDING;
-        const body = f.body;
-        const sx = body[0] - p, sy = body[1] - p;
-        const sw = body[2] + p * 2, sh = body[3] + p * 2;
-        const [x0, y0] = this._stageToParent(sx, sy);
-        const [x1, y1] = this._stageToParent(sx + sw, sy + sh);
-        const w = Math.max(1, x1 - x0), h = Math.max(1, y1 - y0);
-        try {
-            glass.set_position(x0, y0);
-            glass.set_size(w, h);
-            glass.setResolution(w, h);
-            glass.setGlassGeometry(0, 0, w, h);
-            glass.setCornerRadius(f.bodyRadius);
-            glass.setShadowMaxRadius(this._shadowRoom);
-            glass.opacity = Math.round(255 * f.glassOpacity);
-            this._softenMorphGlass(f.soften);
-            this._placeMorphContent(f);
-            glass.show();
-            glass.syncSources();
-        }
-        catch (e) { }
-    }
-
-    _softenMorphGlass(soften) {
-        const m = this._morph;
-        const glass = this._glass;
-        if (!m || !glass)
-            return;
-        const toward = (from, to) => from + (Math.min(from, to) - from) * soften;
-        try {
-            const scale = m.refraction > 0 ? toward(m.refraction, SOFT_REFRACTION) / m.refraction : 1;
-            glass.setAnimationScale(scale);
-        }
-        catch (e) { }
-        const blur = Math.round(toward(m.blurRadius, SOFT_BLUR_RADIUS));
-        if (blur !== m.shownBlurRadius) {
-            m.shownBlurRadius = blur;
-            try {
-                glass.setBlurRadius(blur);
-            }
-            catch (e) { }
-        }
-    }
-
-    // Draws the grid's items `f.contentScale` times their size around the middle
-    // of the travelling glass, cut to its outline.
-    _placeMorphContent(f) {
-        const a = this.animActor;
-        const rest = this._morphMenuRest();
-        const m = this._morph;
-        if (!a || !rest || !m) {
-            if (a)
-                a.opacity = 0;
-            return;
-        }
-        a.opacity = Math.round(255 * f.contentOpacity * f.glassOpacity);
-        const e = this._glassExpand;
-        const [bx, by, bw, bh] = f.body;
-        const s = Math.max(f.contentScale, 0.01);
-        const x = bx + (bw - (rest.w + e * 2) * s) / 2 + e * s;
-        const y = by + (bh - (rest.h + e * 2) * s) / 2 + e * s;
-        const k = rest.k;
-        a.set_scale(s, s);
-        a.set_translation((x - rest.x) / k, (y - rest.y) / k, 0);
-        const clip = [(bx - x) / (s * k), (by - y) / (s * k), bw / (s * k), bh / (s * k)];
-        a.set_clip(clip[0], clip[1], clip[2], clip[3]);
-        try {
-            m.lens.shape(clip, s * k, f.bodyRadius, f.lens);
-        }
-        catch (e) { }
-    }
-
-    _stopMorphTicker() {
-        if (!this._morphTickId)
-            return;
-        removeFrameTicker(this._morphTickId);
-        this._morphTickId = 0;
-    }
-
-    // Leaves the glass and the grid as the rest of the manager expects them.
-    _endMorph() {
-        this._stopMorphTicker();
-        const m = this._morph;
-        if (!m)
-            return;
-        this._morph = null;
-        const glass = this._glass;
-        if (glass) {
-            try {
-                glass.setAnimationScale(1);
-                if (m.shownBlurRadius !== m.blurRadius)
-                    glass.setBlurRadius(m.blurRadius);
-                glass.setMultiRegionMode(true);
-                glass.setCornerRadius(this._cornerRadius || QS_DEFAULT_CORNER_RADIUS);
-                glass.setShadowMaxRadius(this._shadowRoom);
-            }
-            catch (e) { }
-        }
-        if (this.animActor) {
-            try {
-                this.animActor.remove_effect_by_name(CONTENT_LENS);
-            }
-            catch (e) { }
-            try {
-                this.animActor.remove_clip();
-            }
-            catch (e) { }
-            this.animActor.set_translation(0, 0, 0);
-            this.animActor.set_scale(1, 1);
-            this.animActor.set_pivot_point(0.5, 0);
-        }
     }
 
     /**
@@ -3278,13 +2935,7 @@ export class QuickSettingsManager {
             catch (e) { }
         }
         this._signals = [];
-        // Stop the morph and the stamp loop.
-        this._stopMorphTicker();
-        this._morph = null;
-        try {
-            this.animActor?.remove_effect_by_name(CONTENT_LENS);
-        }
-        catch (e) { }
+        // Stop the spring animation loop
         this._anim?.stop();
         // Drop the open-state signal registered in _applyEffect.
         if (this._animSignalId) {
