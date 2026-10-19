@@ -1151,6 +1151,20 @@
       <summary>Preferred text color</summary>
       <description>"light" or "dark" decides when both are equally readable; "auto" favours neither.</description>
     </key>
+    <key name="launcher-pinned" type="aa{ss}">
+      <default>[]</default>
+      <summary>Pinned launcher results</summary>
+      <description>Each with the search provider's id ("provider"), the result's id ("id"), and the name, description and icon it is shown with.</description>
+    </key>
+    <key name="launcher-pinned-transition" type="s">
+      <choices>
+        <choice value="morph"/>
+        <choice value="tween"/>
+      </choices>
+      <default>"morph"</default>
+      <summary>How the launcher changes to its pinned items</summary>
+      <description>"morph": the glass flows into its new shape on a spring, with the content seen deep in it; "tween": the glass eases to its new shape and the content fades.</description>
+    </key>
 
   </schema>
 </schemalist>

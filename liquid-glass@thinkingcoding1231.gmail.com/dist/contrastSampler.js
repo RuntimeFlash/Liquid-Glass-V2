@@ -185,7 +185,8 @@ function _captureViaStage(rect) {
     const y = Math.floor(rect.y);
     const width = Math.max(1, Math.floor(rect.width));
     const height = Math.max(1, Math.floor(rect.height));
-    const scale = Math.min(1, SAMPLE_MAX_EDGE / Math.max(width, height));
+    // The short side is kept at a pixel at least, or a long thin rect would be painted at no height.
+    const scale = Math.min(1, Math.max(SAMPLE_MAX_EDGE / Math.max(width, height), 1 / Math.min(width, height)));
     let content;
     // Painting into an offscreen throws a GError when it cannot be allocated.
     try {

@@ -331,7 +331,15 @@ function addLauncher(page, controls) {
       return ok && key !== 0;
     },
   });
-  controls.watch(['enable-launcher'], () => { shortcut.sensitive = show.active; });
+  const transition = controls.choice(group, 'Change to pinned items', [
+    {title: 'Morph', patch: {'launcher-pinned-transition': 'morph'}},
+    {title: 'Ease', patch: {'launcher-pinned-transition': 'tween'}},
+  ], 'Ctrl+P shows the pinned items. Morph flows the glass into its new shape with the content seen deep in it; ' +
+    'Ease moves it smoothly and fades the content', false);
+  controls.watch(['enable-launcher'], () => {
+    shortcut.sensitive = show.active;
+    transition.sensitive = show.active;
+  });
 }
 
 export function buildDesktopPage(page, controls) {

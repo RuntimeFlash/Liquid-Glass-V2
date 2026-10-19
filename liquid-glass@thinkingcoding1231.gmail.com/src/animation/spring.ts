@@ -151,3 +151,41 @@ export class SwiftSpring {
     return false;
   }
 }
+
+/**
+ * A rectangle carried to each new target by a spring, so it swings a little past it and settles, as liquid
+ * does. `rect()` steps the spring to the time it is given.
+ */
+export class RectSpring {
+  private _from: number[];
+  private _to: number[];
+  private _progress: SwiftSpring;
+  private _lastUs = 0;
+
+  constructor(rect: number[], response = 0.42, dampingFraction = 0.72) {
+    this._from = [...rect];
+    this._to = [...rect];
+    this._progress = new SwiftSpring(response, dampingFraction);
+    this._progress.value = 1;
+    this._progress.target = 1;
+  }
+
+  setTarget(target: number[], nowUs: number): void {
+    if (target.every((v, i) => Math.abs(v - this._to[i]) < 0.5)) return;
+    this._from = this.rect(nowUs);
+    this._to = [...target];
+    this._progress.value = 0;
+    this._progress.velocity = 0;
+  }
+
+  rect(nowUs: number): number[] {
+    if (this._lastUs) this._progress.update((nowUs - this._lastUs) / 1000);
+    this._lastUs = nowUs;
+    const p = this._progress.value;
+    return this._from.map((v, i) => v + (this._to[i] - v) * p);
+  }
+
+  settled(): boolean {
+    return this._progress.value === this._progress.target && this._progress.velocity === 0;
+  }
+}

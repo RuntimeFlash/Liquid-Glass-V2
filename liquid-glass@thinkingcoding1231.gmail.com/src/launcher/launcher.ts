@@ -9,16 +9,20 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import { BackdropGlass } from '../rendering/backdropGlass.js';
+import { ContentLens } from '../rendering/contentLens.js';
 import { ensureGlassAllocated } from '../actors/allocation.js';
 import { isActorValid } from '../actors/lifecycle.js';
 import { startSyncLoop, stopStageLoop } from '../animation/frameLoops.js';
 import { hexToColorArray } from '../animation/colors.js';
 import { RectTween } from '../animation/tween.js';
+import { RectSpring } from '../animation/spring.js';
 import { AdaptiveTextColor } from '../adaptiveText.js';
 import { sanitizeColorPreference } from '../contrastSampler.js';
 import { verticalBoxParams } from '../shellVersion.js';
 import type { Logger } from '../logger.js';
 import type { IconStyler } from '../iconStyle/iconStyler.js';
+import { evaluate, formatNumber } from './calculator.js';
+import { type Pin, PinStore } from './pins.js';
 
 const WIDTH = 680;
 // The search field's top, as a fraction of the monitor's height.
@@ -38,11 +42,43 @@ const SHAPE_MS = 220;
 // Frames asked for past the glass's tween, and after the panel changes size.
 const TICK_MS = 50;
 const HINT_OPACITY = 178;
+// The pinned items' page is a little larger than the search, with applications in a grid of square tiles.
+const PINNED_WIDTH = 760;
+const PINNED_MIN_HEIGHT = 470;
+// The pinned page's content scrolls past this share of the monitor's height.
+const PINNED_MAX_HEIGHT = 0.7;
+const GRID_COLUMNS = 5;
+const GRID_SPACING = 8;
+const TILE_ICON_SIZE = 56;
+const PIN_ICON_SIZE = 16;
+// Changing page: the old content goes over SWITCH_OUT_MS, then the new comes over SWITCH_IN_MS.
+const SWITCH_OUT_MS = 110;
+const SWITCH_IN_MS = 280;
+// Results that change from one search to the next have nothing worth keeping.
+const UNPINNABLE = new Set(['org.gnome.Calculator.desktop']);
+// The panel's padding in stylesheet.css.
+const PANEL_PADDING = 10;
+
+type View = 'search' | 'pinned';
 
 interface Result {
+  // Null for the launcher's own calculation.
   provider: any;
   order: number;
   meta: any;
+}
+
+// A row or tile that the arrow keys move between and Enter opens.
+interface Item {
+  actor: St.Button;
+  activate: () => void;
+}
+
+interface Switch {
+  view: View;
+  morph: boolean;
+  phase: 'out' | 'in';
+  startUs: number;
 }
 
 function isCancelled(e: unknown): boolean {
@@ -67,6 +103,15 @@ export class Launcher {
   private _panel: St.BoxLayout | null = null;
   private _entry: St.Entry | null = null;
   private _list: St.BoxLayout | null = null;
+  private _searchBox: St.BoxLayout | null = null;
+  private _pinnedBox: St.ScrollView | null = null;
+  private _view: View = 'search';
+  private _switch: Switch | null = null;
+  private _lens: InstanceType<typeof ContentLens> | null = null;
+  // The glass's spring while it morphs between pages; the tween the rest of the time.
+  private _spring: RectSpring | null = null;
+  private _pins: PinStore;
+  private _refreshId = 0;
   private _glass: BackdropGlass | null = null;
   private _grab: any = null;
   private _shape = new RectTween(SHAPE_MS);
@@ -81,7 +126,9 @@ export class Launcher {
   private _waiting = 0;
   private _settleId = 0;
   private _results: Result[] = [];
-  private _rows: St.Button[] = [];
+  private _items: Item[] = [];
+  // Of _items on the pinned page, how many are application tiles before the list.
+  private _tileCount = 0;
   private _selected = 0;
   private _terms: string[] = [];
   private _text: AdaptiveTextColor;
@@ -93,7 +140,8 @@ export class Launcher {
     // colour for the panel's new size is chosen as they come, while the glass is still growing to it.
     this._text = new AdaptiveTextColor(() => (this._panel ? [this._panel] : []),
       () => (this._glass ? [this._glass] : []), _logger, 'launcher',
-      { ownColor: true, held: () => this._shape.remaining(GLib.get_monotonic_time()) > 0 });
+      { ownColor: true, held: () => this._shapeRemaining(GLib.get_monotonic_time()) > 0 });
+    this._pins = new PinStore(_settings);
   }
 
   setup(): void {
@@ -137,8 +185,10 @@ export class Launcher {
     glass.setShadowMaxRadius(SHADOW_MARGIN - 10);
     root.add_child(glass);
 
-    const panel = new St.BoxLayout({ style_class: 'liquid-glass-launcher', reactive: true, width: WIDTH,
+    const panel = new St.BoxLayout({ style_class: 'liquid-glass-launcher', reactive: true, can_focus: true, width: WIDTH,
       x: Math.round((monitor.width - WIDTH) / 2), y: Math.round(monitor.height * TOP), ...verticalBoxParams() } as any);
+    // Keys on the pinned page, where the panel has the focus.
+    panel.connect('key-press-event', (_actor: Clutter.Actor, event: Clutter.Event) => this._onPinnedKey(event));
     // A click outside the field closes it. Presses inside must not be stopped: from GNOME 49 a button clicks
     // through a gesture, and an actor that stops the press cancels it.
     root.connect('button-press-event', (_actor: Clutter.Actor, event: Clutter.Event) => {
@@ -163,8 +213,15 @@ export class Launcher {
     entry.hint_actor!.opacity = HINT_OPACITY;
     // Hidden while empty, so the panel's spacing does not add room below the field.
     const list = new St.BoxLayout({ style_class: 'lg-launcher-list', visible: false, ...verticalBoxParams() } as any);
-    panel.add_child(entry);
-    panel.add_child(list);
+    const searchBox = new St.BoxLayout({ style_class: 'lg-launcher-page', x_expand: true, ...verticalBoxParams() } as any);
+    searchBox.add_child(entry);
+    searchBox.add_child(list);
+    const pinnedBox = new St.ScrollView({ style_class: 'lg-launcher-pinned', x_expand: true, visible: false,
+      hscrollbar_policy: St.PolicyType.NEVER, vscrollbar_policy: St.PolicyType.AUTOMATIC, overlay_scrollbars: true,
+      // On the scroll view, as St.BoxLayout ignores min-height; inside the panel's padding.
+      style: `min-height: ${PINNED_MIN_HEIGHT - PANEL_PADDING * 2}px; max-height: ${Math.round(monitor.height * PINNED_MAX_HEIGHT)}px;` });
+    panel.add_child(searchBox);
+    panel.add_child(pinnedBox);
     root.add_child(panel);
     Main.layoutManager.uiGroup.add_child(root);
 
@@ -172,10 +229,15 @@ export class Launcher {
     this._panel = panel;
     this._entry = entry;
     this._list = list;
+    this._searchBox = searchBox;
+    this._pinnedBox = pinnedBox;
+    this._view = 'search';
+    this._switch = null;
+    this._spring = null;
     this._glass = glass;
     this._ticker = ticker;
     this._results = [];
-    this._rows = [];
+    this._items = [];
     this._selected = 0;
     this._applyMaterial();
     this._materialIds = (['tint-color', 'tint-strength', 'blur-radius', 'corner-radius', 'brightness', 'contrast',
@@ -220,8 +282,15 @@ export class Launcher {
     this._panel = null;
     this._entry = null;
     this._list = null;
-    this._rows = [];
+    this._searchBox = null;
+    this._pinnedBox = null;
+    this._lens = null;
+    this._switch = null;
+    this._spring = null;
+    this._items = [];
     this._results = [];
+    if (this._refreshId) global.compositor.get_laters().remove(this._refreshId);
+    this._refreshId = 0;
     root.remove_all_transitions();
     glass?.cleanup();
     if (isActorValid(root)) root.destroy();
@@ -230,6 +299,31 @@ export class Launcher {
   /** Types `text` into the field, for the test driver. */
   setText(text: string): void {
     if (this._entry) this._entry.text = text;
+  }
+
+  /** The pinned items' page, or the search again. */
+  showView(view: View): void {
+    if (!this._root || view === (this._switch?.view ?? this._view)) return;
+    const morph = this._settings.get_string('launcher-pinned-transition') !== 'tween';
+    const sw = this._switch;
+    if (sw) {
+      // Turned back midway: the content goes again from as far as it had come, or comes back from as far as
+      // it had gone.
+      sw.view = view;
+      if (sw.phase === 'in' && view !== this._view) {
+        const now = GLib.get_monotonic_time();
+        const shown = 1 - (1 - Math.min((now - sw.startUs) / 1000 / SWITCH_IN_MS, 1)) ** 3;
+        sw.phase = 'out';
+        sw.startUs = now - (1 - shown) * SWITCH_OUT_MS * 1000;
+      }
+      return;
+    }
+    this._switch = { view, morph, phase: 'out', startUs: GLib.get_monotonic_time() };
+    if (morph) {
+      this._lens = new ContentLens();
+      this._panel!.add_effect(this._lens);
+    }
+    this._keepTicking();
   }
 
   private _applyMaterial(): void {
@@ -260,25 +354,109 @@ export class Launcher {
       const grow = (OPEN_SCALE - 1) / 2;
       this._shape.start([rest[0] - w * grow, rest[1] - h * grow, w * OPEN_SCALE, h * OPEN_SCALE], rest, now);
     }
-    this._shape.setTarget(rest, now);
-    const [x, y, gw, gh] = this._shape.rect(now);
+    let x: number, y: number, gw: number, gh: number;
+    if (this._spring) {
+      this._spring.setTarget(rest, now);
+      [x, y, gw, gh] = this._spring.rect(now);
+    } else {
+      this._shape.setTarget(rest, now);
+      [x, y, gw, gh] = this._shape.rect(now);
+    }
     const p = SHADER_PADDING;
     glass.set_position(0, 0);
     glass.set_size(root.width, root.height);
     glass.setResolution(root.width, root.height);
     glass.setGlassGeometry(x - p, y - p, gw + p * 2, gh + p * 2);
-    panel.set_clip(x - panel.x, y - panel.y, gw, gh);
+    const clip = [x - panel.x, y - panel.y, gw, gh];
+    panel.set_clip(clip[0], clip[1], clip[2], clip[3]);
+    this._stepSwitch(now, [x, y, gw, gh], clip);
     this._keepTicking();
     ensureGlassAllocated(glass);
     glass.syncSources();
   }
 
+  private _shapeRemaining(nowUs: number): number {
+    if (this._switch) return TICK_MS;
+    if (this._spring) return this._spring.settled() ? 0 : TICK_MS;
+    return this._shape.remaining(nowUs);
+  }
+
   private _keepTicking(): void {
     const ticker = this._ticker;
-    const left = this._shape.remaining(GLib.get_monotonic_time());
+    const left = this._shapeRemaining(GLib.get_monotonic_time());
     if (!ticker || ticker.is_playing() || left <= 0) return;
     ticker.set_duration(Math.ceil(left) + TICK_MS);
     ticker.start();
+  }
+
+  // Changing page: the content goes (in a morph, sinking deep into the glass), the page is swapped, the glass
+  // takes the new page's shape, and the new content comes up.
+  private _stepSwitch(now: number, rect: number[], clip: number[]): void {
+    const sw = this._switch;
+    if (!sw) {
+      if (this._spring?.settled()) {
+        this._shape.start(rect, rect, now);
+        this._spring = null;
+      }
+      return;
+    }
+    const panel = this._panel!;
+    const elapsed = (now - sw.startUs) / 1000;
+    let shown: number;
+    if (sw.phase === 'out') {
+      const k = Math.min(elapsed / SWITCH_OUT_MS, 1);
+      shown = 1 - k;
+      if (k >= 1 && sw.view === this._view) {
+        // Turned back before the swap: the same page comes back.
+        sw.phase = 'in';
+        sw.startUs = now;
+      } else if (k >= 1) {
+        this._setView(sw.view);
+        sw.phase = 'in';
+        sw.startUs = now;
+        if (sw.morph) this._spring = new RectSpring(rect);
+      }
+    } else {
+      const k = Math.min(elapsed / SWITCH_IN_MS, 1);
+      shown = 1 - (1 - k) ** 3;
+      if (k >= 1) {
+        this._switch = null;
+        if (this._lens) panel.remove_effect(this._lens);
+        this._lens = null;
+        panel.opacity = 255;
+        return;
+      }
+    }
+    panel.opacity = Math.round(255 * shown);
+    this._lens?.shape(clip, 1, this._settings.get_double('launcher-corner-radius'), 1 - shown);
+  }
+
+  private _setView(view: View): void {
+    const panel = this._panel!;
+    const root = this._root!;
+    this._view = view;
+    const pinned = view === 'pinned';
+    const width = pinned ? PINNED_WIDTH : WIDTH;
+    panel.set_width(width);
+    panel.x = Math.round((root.width - width) / 2);
+    this._searchBox!.visible = !pinned;
+    this._pinnedBox!.visible = pinned;
+    if (pinned) {
+      this._showPinned();
+      global.stage.set_key_focus(panel);
+    } else {
+      this._showResults();
+      global.stage.set_key_focus(this._entry!.clutter_text);
+    }
+  }
+
+  private _isPinnedShortcut(event: Clutter.Event): boolean {
+    const key = event.get_key_symbol();
+    return (event.get_state() & Clutter.ModifierType.CONTROL_MASK) !== 0 && (key === Clutter.KEY_p || key === Clutter.KEY_P);
+  }
+
+  private _isEnter(key: number): boolean {
+    return key === Clutter.KEY_Return || key === Clutter.KEY_KP_Enter || key === Clutter.KEY_ISO_Enter;
   }
 
   private _onKey(event: Clutter.Event): boolean {
@@ -287,37 +465,98 @@ export class Launcher {
       this.close();
       return Clutter.EVENT_STOP;
     }
+    if (this._isPinnedShortcut(event)) {
+      this.showView('pinned');
+      return Clutter.EVENT_STOP;
+    }
     if (key === Clutter.KEY_Down || key === Clutter.KEY_Up) {
-      const n = this._rows.length;
+      const n = this._items.length;
       if (n > 0) this._select((this._selected + (key === Clutter.KEY_Down ? 1 : n - 1)) % n);
       return Clutter.EVENT_STOP;
     }
-    if (key === Clutter.KEY_Return || key === Clutter.KEY_KP_Enter || key === Clutter.KEY_ISO_Enter) {
-      this._activate(this._selected);
+    if (this._isEnter(key)) {
+      this._items[this._selected]?.activate();
       return Clutter.EVENT_STOP;
     }
     return Clutter.EVENT_PROPAGATE;
   }
 
-  private _select(index: number): void {
-    this._rows[this._selected]?.remove_style_pseudo_class('selected');
-    this._selected = index;
-    this._rows[index]?.add_style_pseudo_class('selected');
+  // The tiles are moved between as a grid, then the list below them row by row.
+  private _onPinnedKey(event: Clutter.Event): boolean {
+    if (this._view !== 'pinned') return Clutter.EVENT_PROPAGATE;
+    const key = event.get_key_symbol();
+    if (key === Clutter.KEY_Escape || key === Clutter.KEY_BackSpace || this._isPinnedShortcut(event)) {
+      this.showView('search');
+      return Clutter.EVENT_STOP;
+    }
+    if (this._isEnter(key)) {
+      this._items[this._selected]?.activate();
+      return Clutter.EVENT_STOP;
+    }
+    const n = this._items.length, tiles = this._tileCount, i = this._selected;
+    let next = i;
+    if (key === Clutter.KEY_Right) next = Math.min(i + 1, n - 1);
+    else if (key === Clutter.KEY_Left) next = Math.max(i - 1, 0);
+    else if (key === Clutter.KEY_Down) next = i < tiles ? (i + GRID_COLUMNS < tiles ? i + GRID_COLUMNS : Math.min(tiles, n - 1)) : Math.min(i + 1, n - 1);
+    else if (key === Clutter.KEY_Up) next = i < tiles ? (i >= GRID_COLUMNS ? i - GRID_COLUMNS : i) : i === tiles ? Math.max(tiles - 1, 0) : i - 1;
+    else {
+      // Typing goes back to the search, with what was typed in the field.
+      const text = event.get_key_unicode() as unknown as string;
+      if ((event.get_state() & Clutter.ModifierType.CONTROL_MASK) || !/^[^\p{C}]$/u.test(text)) return Clutter.EVENT_PROPAGATE;
+      this._entry!.text = text;
+      this.showView('search');
+      return Clutter.EVENT_STOP;
+    }
+    if (n > 0) this._select(next);
+    return Clutter.EVENT_STOP;
   }
 
-  private _activate(index: number): void {
-    const result = this._results[index];
-    if (!result) return;
+  private _select(index: number): void {
+    this._items[this._selected]?.actor.remove_style_pseudo_class('selected');
+    this._selected = index;
+    const item = this._items[index];
+    if (!item) return;
+    item.actor.add_style_pseudo_class('selected');
+    if (this._view === 'pinned') this._scrollTo(item.actor);
+  }
+
+  private _scrollTo(actor: Clutter.Actor): void {
+    const view = this._pinnedBox!;
+    const page = view.get_child() as unknown as Clutter.Actor;
+    const adjustment = view.get_vadjustment();
+    // Both are moved by the scrolling alike, so their difference is the actor's place on the page.
+    const y1 = actor.get_transformed_position()[1] - page.get_transformed_position()[1];
+    const y2 = y1 + actor.height;
+    if (y1 < adjustment.value) adjustment.value = y1;
+    else if (y2 > adjustment.value + adjustment.page_size) adjustment.value = y2 - adjustment.page_size;
+  }
+
+  private _activateResult(result: Result): void {
     const { provider, meta } = result;
     const terms = this._terms;
     this.close();
-    if (provider.isRemoteProvider) {
+    if (!provider) {
+      // The calculation: its value goes to the clipboard.
+      St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, meta.value);
+    } else if (provider.isRemoteProvider) {
       provider.activateResult(meta.id, terms);
     } else if (meta.id.endsWith('.desktop')) {
       Shell.AppSystem.get_default().lookup_app(meta.id)?.activate();
     } else {
       (SystemActions.getDefault() as any).activateAction(meta.id);
     }
+  }
+
+  private _activatePin(pin: Pin): void {
+    this.close();
+    if (pin.provider === 'applications') {
+      if (pin.id.endsWith('.desktop')) Shell.AppSystem.get_default().lookup_app(pin.id)?.activate();
+      else (SystemActions.getDefault() as any).activateAction(pin.id);
+      return;
+    }
+    const provider = this._providers().find(p => p.id === pin.provider);
+    if (provider) provider.activateResult(pin.id, []);
+    else this._logger.log(`[Liquid Glass] No search provider ${pin.provider} for pinned ${pin.id}`);
   }
 
   private _cancelSearch(): void {
@@ -350,6 +589,8 @@ export class Launcher {
     this._terms = text ? text.split(/\s+/) : [];
     const providers = this._terms.length ? this._providers() : [];
     this._found = [];
+    const value = evaluate(text);
+    if (value !== null) this._found.push(this._calculation(text, value));
     this._waiting = providers.length;
     if (!this._waiting) {
       this._commit();
@@ -369,8 +610,11 @@ export class Launcher {
     const terms = this._terms;
     let metas: any[] = [];
     try {
-      const ids = await provider.getInitialResultSet(terms, cancellable);
-      const wanted = provider.filterResults(ids, PER_PROVIDER);
+      const ids: string[] = await provider.getInitialResultSet(terms, cancellable);
+      // Pinned results go first, so that the cut to PER_PROVIDER keeps them.
+      const pinned = this._pins.idsOf(provider.id);
+      const ordered = pinned.size ? [...ids.filter(id => pinned.has(id)), ...ids.filter(id => !pinned.has(id))] : ids;
+      const wanted = provider.filterResults(ordered, PER_PROVIDER);
       if (wanted.length > 0 && !cancellable.is_cancelled())
         metas = await provider.getResultMetas(wanted, cancellable);
     } catch (e) {
@@ -382,44 +626,219 @@ export class Launcher {
     if (this._waiting === 0 || !this._settleId) this._commit();
   }
 
+  // The calculation, first of all results, with the value as its name.
+  private _calculation(text: string, value: number): Result {
+    const formatted = formatNumber(value);
+    return { provider: null, order: -1, meta: {
+      id: 'liquid-glass-calculation', name: formatted, value: formatted,
+      description: `${text.replace(/=\s*$/, '').trim()} = ${formatted} · Enter copies the result`,
+      createIcon: (size: number) => new St.Icon({ icon_name: 'accessories-calculator-symbolic', icon_size: size }),
+    } };
+  }
+
+  private _isPinned(result: Result): boolean {
+    return !!result.provider && this._pins.has(result.provider.id, result.meta.id);
+  }
+
   private _commit(): void {
     if (this._settleId) GLib.Source.remove(this._settleId);
     this._settleId = 0;
-    this._results = [...this._found].sort((a, b) => a.order - b.order).slice(0, MAX_RESULTS);
-    this._show();
+    // The calculation first, then pinned results, then each provider's in the overview's order.
+    const rank = (r: Result) => (r.provider ? (this._isPinned(r) ? 1 : 2) : 0);
+    this._results = [...this._found].sort((a, b) => rank(a) - rank(b) || a.order - b.order).slice(0, MAX_RESULTS);
+    if (this._view === 'search' && !this._switch) this._showResults();
   }
 
-  private _show(): void {
+  private _showResults(): void {
     const list = this._list;
     if (!list) return;
     list.destroy_all_children();
-    this._rows = this._results.map((result, i) => {
-      const row = new St.Button({ style_class: 'lg-launcher-result', can_focus: false, x_expand: true });
-      const box = new St.BoxLayout({ style_class: 'lg-launcher-result-box', x_expand: true });
-      // A remote provider's result may come without an icon; its application's icon stands in.
-      const gicon = result.provider.appInfo?.get_icon();
-      const icon = result.meta.createIcon(ICON_SIZE) ?? (gicon ? new St.Icon({ gicon, icon_size: ICON_SIZE }) : null);
-      const text = new St.BoxLayout({ y_align: Clutter.ActorAlign.CENTER, x_expand: true, ...verticalBoxParams() } as any);
-      const name = new St.Label({ text: result.meta.name ?? '', style_class: 'lg-launcher-name' });
-      name.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-      text.add_child(name);
-      const detail = result.meta.description || result.provider.appInfo?.get_name() || '';
-      if (detail) {
-        const label = new St.Label({ text: detail, style_class: 'lg-launcher-detail' });
-        label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-        text.add_child(label);
-      }
-      if (icon instanceof St.Icon && result.provider.id === 'applications') this._icons.styleLauncherIcon(icon, result.meta.id);
-      if (icon) box.add_child(icon);
-      box.add_child(text);
-      row.set_child(box);
-      row.connect('clicked', () => this._activate(i));
+    this._items = this._results.map((result, i) => {
+      const icon = this._resultIcon(result, ICON_SIZE);
+      const activate = () => this._activateResult(result);
+      const row = this._row(icon, result.meta.name ?? '', result.meta.description || result.provider?.appInfo?.get_name() || '',
+        this._pinOf(result, icon), activate, () => {});
       row.connect('notify::hover', () => { if (row.hover) this._select(i); });
       list.add_child(row);
-      return row;
+      return { actor: row, activate };
     });
-    list.visible = this._rows.length > 0;
-    this._select(Math.min(this._selected, Math.max(this._rows.length - 1, 0)));
+    list.visible = this._items.length > 0;
+    this._tileCount = 0;
+    this._select(Math.min(this._selected, Math.max(this._items.length - 1, 0)));
+    this._text.invalidate();
+    this._colorText();
+  }
+
+  private _resultIcon(result: Result, size: number): Clutter.Actor | null {
+    // A remote provider's result may come without an icon; its application's icon stands in.
+    const gicon = result.provider?.appInfo?.get_icon();
+    const icon = result.meta.createIcon(size) ?? (gicon ? new St.Icon({ gicon, icon_size: size }) : null);
+    if (icon instanceof St.Icon && result.provider?.id === 'applications') this._icons.styleLauncherIcon(icon, result.meta.id);
+    return icon;
+  }
+
+  // What a result is kept as when pinned, or null when it cannot be.
+  private _pinOf(result: Result, icon: Clutter.Actor | null): Pin | null {
+    const { provider, meta } = result;
+    if (!provider || UNPINNABLE.has(provider.id)) return null;
+    const gicon = (icon instanceof St.Icon ? icon.gicon : null) ?? provider.appInfo?.get_icon() ?? null;
+    return { provider: provider.id, id: meta.id, name: meta.name ?? '', description: meta.description ?? '',
+      icon: gicon?.to_string() ?? '' };
+  }
+
+  // The pin to the left of a row or in a tile's corner: an outline while not pinned, shown on hover, and filled
+  // while pinned, shown all the time. A click on it flips it; a click on the rest of the owner activates that.
+  private _pinToggle(owner: St.Button, pin: Pin, activate: () => void, onChange: () => void): St.Bin {
+    const icon = new St.Icon({ icon_size: PIN_ICON_SIZE });
+    const toggle = new St.Bin({ style_class: 'lg-launcher-pin', reactive: true, track_hover: true, child: icon,
+      y_align: Clutter.ActorAlign.CENTER });
+    const sync = () => {
+      const pinned = this._pins.has(pin.provider, pin.id);
+      icon.gicon = Gio.FileIcon.new(Gio.File.new_for_path(`${this._path}/media/${pinned ? 'pinned' : 'pin'}-symbolic.svg`));
+      toggle.opacity = pinned || owner.hover ? 255 : 0;
+    };
+    owner.connect('notify::hover', sync);
+    owner.connect('clicked', () => {
+      // By position rather than toggle.hover: a pin that was transparent when the pointer came is not picked
+      // until the pointer moves again.
+      const [px, py] = global.get_pointer();
+      const [x, y] = toggle.get_transformed_position();
+      const [w, h] = toggle.get_transformed_size();
+      if (!(px >= x && px < x + w && py >= y && py < y + h)) {
+        activate();
+        return;
+      }
+      this._pins.toggle(pin);
+      sync();
+      onChange();
+    });
+    sync();
+    return toggle;
+  }
+
+  private _row(icon: Clutter.Actor | null, title: string, detail: string, pin: Pin | null, activate: () => void,
+    onPinChange: () => void): St.Button {
+    const row = new St.Button({ style_class: 'lg-launcher-result', can_focus: false, x_expand: true });
+    const box = new St.BoxLayout({ style_class: 'lg-launcher-result-box', x_expand: true });
+    // The pin's room is kept on every row, so that the icons line up.
+    if (pin) {
+      box.add_child(this._pinToggle(row, pin, activate, onPinChange));
+    } else {
+      box.add_child(new St.Widget({ style_class: 'lg-launcher-pin', width: PIN_ICON_SIZE }));
+      row.connect('clicked', activate);
+    }
+    const text = new St.BoxLayout({ y_align: Clutter.ActorAlign.CENTER, x_expand: true, ...verticalBoxParams() } as any);
+    const name = new St.Label({ text: title, style_class: 'lg-launcher-name' });
+    name.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+    text.add_child(name);
+    if (detail) {
+      const label = new St.Label({ text: detail, style_class: 'lg-launcher-detail' });
+      label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+      text.add_child(label);
+    }
+    if (icon) box.add_child(icon);
+    box.add_child(text);
+    row.set_child(box);
+    return row;
+  }
+
+  private _pinIcon(pin: Pin, size: number): St.Icon {
+    if (pin.provider === 'applications' && pin.id.endsWith('.desktop')) {
+      const app = Shell.AppSystem.get_default().lookup_app(pin.id);
+      if (app) {
+        const icon = app.create_icon_texture(size) as St.Icon;
+        this._icons.styleLauncherIcon(icon, pin.id);
+        return icon;
+      }
+    }
+    let gicon: Gio.Icon | null = null;
+    try {
+      if (pin.icon) gicon = Gio.icon_new_for_string(pin.icon);
+    } catch (e) {
+      this._logger.log(`[Liquid Glass] Pinned ${pin.id} has an unreadable icon: ${e}`);
+    }
+    return new St.Icon({ gicon: gicon ?? Gio.ThemedIcon.new('text-x-generic-symbolic'), icon_size: size });
+  }
+
+  // The pinned page: a back button, the applications in a grid of square tiles, and the rest as a list.
+  private _showPinned(): void {
+    const view = this._pinnedBox!;
+    (view.get_child() as unknown as Clutter.Actor | null)?.destroy();
+    const page = new St.BoxLayout({ style_class: 'lg-launcher-page', x_expand: true, ...verticalBoxParams() } as any);
+    const header = new St.BoxLayout({ style_class: 'lg-launcher-header' });
+    const back = new St.Button({ style_class: 'lg-launcher-back', can_focus: false, accessible_name: 'Back to the search',
+      child: new St.Icon({ icon_name: 'go-previous-symbolic', icon_size: PIN_ICON_SIZE }) });
+    back.connect('clicked', () => this.showView('search'));
+    header.add_child(back);
+    header.add_child(new St.Label({ text: 'Pinned', style_class: 'lg-launcher-title', y_align: Clutter.ActorAlign.CENTER }));
+    page.add_child(header);
+
+    const pins = this._pins.all();
+    const apps = pins.filter(p => p.provider === 'applications');
+    const rest = pins.filter(p => p.provider !== 'applications');
+    this._items = [];
+    // After the click that unpinned an item has been handled: the page is built again without it.
+    const refresh = () => {
+      if (this._refreshId) return;
+      this._refreshId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => {
+        this._refreshId = 0;
+        if (this._view === 'pinned' && this._pinnedBox) this._showPinned();
+        return GLib.SOURCE_REMOVE;
+      });
+    };
+    if (apps.length) {
+      page.add_child(new St.Label({ text: 'Applications', style_class: 'lg-launcher-section' }));
+      const tile = Math.floor((PINNED_WIDTH - PANEL_PADDING * 2 - GRID_SPACING * (GRID_COLUMNS - 1)) / GRID_COLUMNS);
+      let line: St.BoxLayout | null = null;
+      apps.forEach((pin, i) => {
+        if (i % GRID_COLUMNS === 0) {
+          line = new St.BoxLayout({ style_class: 'lg-launcher-grid-row' });
+          page.add_child(line);
+        }
+        const app = pin.id.endsWith('.desktop') ? Shell.AppSystem.get_default().lookup_app(pin.id) : null;
+        const button = new St.Button({ style_class: 'lg-launcher-tile', can_focus: false, width: tile, height: tile });
+        const content = new St.BoxLayout({ style_class: 'lg-launcher-tile-box', x_align: Clutter.ActorAlign.CENTER,
+          y_align: Clutter.ActorAlign.CENTER, x_expand: true, y_expand: true, ...verticalBoxParams() } as any);
+        const icon = this._pinIcon(pin, TILE_ICON_SIZE);
+        icon.x_align = Clutter.ActorAlign.CENTER;
+        content.add_child(icon);
+        const name = new St.Label({ text: app?.get_name() ?? pin.name, style_class: 'lg-launcher-tile-name',
+          x_align: Clutter.ActorAlign.CENTER });
+        name.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        content.add_child(name);
+        const toggle = this._pinToggle(button, pin, () => this._activatePin(pin), refresh);
+        toggle.set({ x_align: Clutter.ActorAlign.START, y_align: Clutter.ActorAlign.START, x_expand: true, y_expand: true });
+        const stack = new St.Widget({ layout_manager: new Clutter.BinLayout(), x_expand: true, y_expand: true });
+        stack.add_child(content);
+        stack.add_child(toggle);
+        button.set_child(stack);
+        const index = this._items.length;
+        button.connect('notify::hover', () => { if (button.hover) this._select(index); });
+        line!.add_child(button);
+        this._items.push({ actor: button, activate: () => this._activatePin(pin) });
+      });
+    }
+    this._tileCount = this._items.length;
+    if (rest.length) {
+      page.add_child(new St.Label({ text: 'Files', style_class: 'lg-launcher-section' }));
+      const list = new St.BoxLayout({ style_class: 'lg-launcher-list', ...verticalBoxParams() } as any);
+      for (const pin of rest) {
+        const provider = this._providers().find(p => p.id === pin.provider);
+        const row = this._row(this._pinIcon(pin, ICON_SIZE), pin.name,
+          pin.description || provider?.appInfo?.get_name() || '', pin, () => this._activatePin(pin), refresh);
+        const index = this._items.length;
+        row.connect('notify::hover', () => { if (row.hover) this._select(index); });
+        list.add_child(row);
+        this._items.push({ actor: row, activate: () => this._activatePin(pin) });
+      }
+      page.add_child(list);
+    }
+    if (!pins.length) {
+      page.add_child(new St.Label({ text: 'Nothing pinned yet. Point at a search result and click the pin on its left.',
+        style_class: 'lg-launcher-empty', x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER, y_expand: true }));
+    }
+    view.set_child(page);
+    this._select(Math.min(this._selected, Math.max(this._items.length - 1, 0)));
     this._text.invalidate();
     this._colorText();
   }
@@ -429,8 +848,9 @@ export class Launcher {
   private _colorText(): void {
     const root = this._root!;
     const panel = this._panel!;
-    const [, height] = panel.get_preferred_height(WIDTH);
-    const rect = { x: root.x + panel.x, y: root.y + panel.y, width: WIDTH, height: Math.ceil(height) };
+    const width = this._view === 'pinned' ? PINNED_WIDTH : WIDTH;
+    const [, height] = panel.get_preferred_height(width);
+    const rect = { x: root.x + panel.x, y: root.y + panel.y, width, height: Math.ceil(height) };
     const key = `${rect.y},${rect.height}`;
     if (key === this._coloredFor) return;
     this._coloredFor = key;

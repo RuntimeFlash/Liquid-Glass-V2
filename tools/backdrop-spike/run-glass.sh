@@ -33,7 +33,7 @@ ext="$out/data/gnome-shell/extensions"
 mkdir -p "$out"/{config,cache,shots} "$ext"
 rm -rf "${ext:?}"/*
 mkdir -p "$ext/$lg_uuid"
-for f in metadata.json extension.js stylesheet.css dist shaders schemas fonts; do
+for f in metadata.json extension.js stylesheet.css dist shaders schemas fonts media; do
   cp -r "$repo/$ext_dir/$f" "$ext/$lg_uuid/"
 done
 cp -r "$dtd_src" "$ext/$dtd_uuid"

@@ -1596,11 +1596,11 @@ export default class LgDriver extends Extension {
     const {Launcher} = await this._lgModule('launcher/launcher.js');
     const launcher = Launcher.instance;
     const activated = [];
-    launcher._activate = i => {
-      activated.push(i);
+    launcher._activateResult = result => {
+      activated.push(launcher._results.indexOf(result));
       launcher.close();
     };
-    const rows = () => launcher._rows ?? [];
+    const rows = () => (launcher._items ?? []).map(item => item.actor);
     const hovered = () => rows().map(r => (r.hover ? 1 : 0)).join('');
     // LG_DRV_LAUNCHER_QUERY: what to search for (default "set").
     const query = GLib.getenv('LG_DRV_LAUNCHER_QUERY') ?? 'set';
@@ -1675,7 +1675,7 @@ export default class LgDriver extends Extension {
         await sleep(1500);
       }
     }
-    delete launcher._activate;
+    delete launcher._activateResult;
     launcher._shape._durationMs = 220;
     settings.reset('launcher-enable-adaptive-text-color');
     // One more letter with the same number of results: the glass keeps its height.
@@ -1816,6 +1816,99 @@ export default class LgDriver extends Extension {
     dark.destroy();
     white.destroy();
     await sleep(500);
+  }
+
+  // The launcher's calculations and pinned items: a calculation comes first, a result is pinned and unpinned
+  // with a click on its pin, a pinned result comes before the others, and Ctrl+P and the back button change
+  // page, in both transitions.
+  async _launcherPins(settings, m, launcher) {
+    const backend = SHELL_MAJOR >= 48 ? global.stage.context.get_backend() : Clutter.get_default_backend();
+    const seat = backend.get_default_seat();
+    // The hot corner's barriers hold a pointer that starts in the corner.
+    new Gio.Settings({schema_id: 'org.gnome.desktop.interface'}).set_boolean('enable-hot-corners', false);
+    const pointer = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+    const keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+    await sleep(300);
+    const t = () => GLib.get_monotonic_time();
+    const click = async actor => {
+      const [x, y] = actor.get_transformed_position();
+      const [w, h] = actor.get_transformed_size();
+      pointer.notify_absolute_motion(t(), x + w / 2, y + h / 2);
+      await sleep(250);
+      pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
+      await sleep(60);
+      pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
+      await sleep(250);
+    };
+    const ctrlP = async () => {
+      keyboard.notify_keyval(t(), Clutter.KEY_Control_L, Clutter.KeyState.PRESSED);
+      keyboard.notify_keyval(t(), Clutter.KEY_p, Clutter.KeyState.PRESSED);
+      keyboard.notify_keyval(t(), Clutter.KEY_p, Clutter.KeyState.RELEASED);
+      keyboard.notify_keyval(t(), Clutter.KEY_Control_L, Clutter.KeyState.RELEASED);
+    };
+    const names = () => launcher._results.map(r => `${r.meta.name}${launcher._isPinned(r) ? '*' : ''}`).join(' | ');
+    const panelRect = () => [...launcher._panel.get_transformed_position(), ...launcher._panel.get_transformed_size()].map(Math.round);
+    settings.reset('launcher-pinned');
+    launcher.open();
+    await sleep(800);
+    for (const query of ['3*8=', '1-5', '2^10 / 4', '(1+2']) {
+      launcher.setText(query);
+      await sleep(900);
+      log(`launcher calc "${query}": ${launcher._results[0]?.provider ? 'no calculation' : launcher._results[0]?.meta.name} first of ${launcher._results.length}`);
+    }
+    launcher.setText('set');
+    await sleep(2500);
+    log(`launcher pins before: ${names()}`);
+    // The second application result and the first of another provider, each pinned by its pin.
+    const pinnable = launcher._results.map((r, i) => [r, i]).filter(([r]) => r.provider);
+    const picks = [pinnable.find(([r]) => r.provider.id === 'applications' && r !== pinnable[0][0]),
+      pinnable.find(([r]) => r.provider.id !== 'applications')].filter(Boolean);
+    for (const [, i] of picks) {
+      const row = launcher._items[i].actor;
+      const toggle = row.get_child().get_first_child();
+      const [tx, ty] = toggle.get_transformed_position();
+      const [tw, th] = toggle.get_transformed_size();
+      const under = global.stage.get_actor_at_pos(Clutter.PickMode.REACTIVE, tx + tw / 2, ty + th / 2);
+      log(`launcher pin toggle row ${i}: ${[tx, ty, tw, th].map(Math.round)} class=${toggle.style_class} under=${under?.constructor.name}.${under?.style_class ?? under?.name}`);
+      await click(toggle);
+      log(`launcher pin click row ${i}: open=${!!launcher._root} pins=${launcher._pins.all().map(p => `${p.provider}:${p.id}`).join(',')} ` +
+        `toggle opacity=${toggle.opacity}`);
+    }
+    launcher.setText('se');
+    await sleep(300);
+    launcher.setText('set');
+    await sleep(2500);
+    log(`launcher pins after: ${names()}`);
+    await shot('launcher-pins-results', [m.x, m.y, m.width, m.height]);
+    for (const transition of ['morph', 'tween']) {
+      settings.set_string('launcher-pinned-transition', transition);
+      const before = panelRect();
+      await ctrlP();
+      await sleep(200);
+      await shot(`launcher-pinned-${transition}-mid`, [m.x, m.y, m.width, m.height]);
+      await sleep(1200);
+      log(`launcher pinned ${transition}: view=${launcher._view} panel ${before} -> ${panelRect()} clip=${launcher._panel.get_clip().map(Math.round)} ` +
+        `items=${launcher._items.length} tiles=${launcher._tileCount} lens=${!!launcher._lens} opacity=${launcher._panel.opacity}`);
+      await shot(`launcher-pinned-${transition}`, [m.x, m.y, m.width, m.height]);
+      const back = findActors(launcher._panel, a => a.has_style_class_name?.('lg-launcher-back'))[0];
+      await click(back);
+      await sleep(1200);
+      log(`launcher back ${transition}: view=${launcher._view} panel=${panelRect()} focus=${global.stage.key_focus === launcher._entry.clutter_text}`);
+    }
+    // Unpinned on the pinned page, from the tile's corner.
+    launcher.showView('pinned');
+    await sleep(1200);
+    const tile = launcher._items[0]?.actor;
+    if (tile) {
+      const toggle = findActors(tile, a => a.has_style_class_name?.('lg-launcher-pin'))[0];
+      await click(toggle);
+      await sleep(500);
+      log(`launcher unpin from tile: pins=${launcher._pins.all().length} items=${launcher._items.length} tiles=${launcher._tileCount}`);
+    }
+    launcher.close();
+    settings.reset('launcher-pinned');
+    settings.reset('launcher-pinned-transition');
+    await sleep(800);
   }
 
   // Application icons redrawn as glass plates under a symbol: in the dock
@@ -2365,6 +2458,7 @@ export default class LgDriver extends Extension {
       await shot('launcher-results', [m.x, m.y, m.width, m.height]);
       launcher?.close();
       await sleep(1000);
+      await this._launcherPins(settings, m, launcher);
     }
     if (parts.includes('launcherpointer'))
       await this._launcherPointer(settings, m);

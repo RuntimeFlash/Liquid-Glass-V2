@@ -169,11 +169,15 @@ The widgets and the clock are hidden in the overview, together with the windows.
 
 A search field on glass in the middle of the screen, like Spotlight, opened with <kbd>Super</kbd> + <kbd>Alt</kbd> + <kbd>Space</kbd> (changeable in the preferences). It asks the same search providers as the overview, so it finds applications, settings, files, calculations and whatever else your installed apps provide, as far as they are enabled in Settings → Search. Use the arrow keys and <kbd>Enter</kbd>, or click a result; <kbd>Esc</kbd> or a click outside closes it.
 
+Arithmetic such as `3*8`, `3*8=` or `1-5` is worked out by the launcher itself and shown first; <kbd>Enter</kbd> copies the result.
+
+Point at a result and a pin appears on its left: click it to pin the result (applications, files, settings and the like; not calculations). Pinned results keep a filled pin, come first when they match a search, and are listed on their own page, opened with <kbd>Ctrl</kbd> + <kbd>P</kbd>: applications in a grid, everything else in a list below, each with its pin to unpin it. The back button, <kbd>Esc</kbd> or <kbd>Ctrl</kbd> + <kbd>P</kbd> goes back to the search, as does typing. The glass changes to the larger page either by morphing, with the content seen deep in the glass on the way, or by easing with the content fading (**Desktop → Launcher → Change to pinned items**).
+
 ## Preferences
 
 - **Appearance** — shared blur, corners and tint; animations, automatic text contrast and matching menu heights.
 - **Effects** — choose where glass appears: top bar, dock, menus, popups, application icons and application windows.
-- **Desktop** — the glass clock, the desktop widgets and the launcher.
+- **Desktop** — the glass clock, the desktop widgets and the launcher (its shortcut, and how it changes to its pinned items).
 - **Rendering** — rendering quality, refraction, edge lighting, shadows and diagnostics.
 
 Opening the window preserves your configuration. **Custom** means your existing
@@ -292,6 +296,7 @@ A significant part of this codebase was written with the help of AI coding assis
 - [x] Glass application icons in the dock and the launcher (tinted, mono, clear)
 - [x] Glass application icons in the app grid
 - [x] Drop shadow on every Quick Settings grid card
+- [x] Pin launcher results, with a page of pinned items, and work out arithmetic in the launcher
 
 ### Next
 - [ ] Publish to extensions.gnome.org (not approved yet)

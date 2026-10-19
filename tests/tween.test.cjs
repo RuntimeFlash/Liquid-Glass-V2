@@ -40,3 +40,17 @@ test('a tween counts down to landing from its last restart', () => {
   assert.equal(tween.remaining(300000), 100);
   assert.equal(tween.remaining(400000), 0);
 });
+
+const { RectSpring } = loadModule(path.join(dist, 'animation/spring.js'), {});
+
+test('a rect spring swings a little past its target and settles on it', () => {
+  const spring = new RectSpring([0, 0, 100, 100]);
+  spring.rect(0);
+  spring.setTarget([0, 0, 100, 300], 0);
+  let peak = 0;
+  let us = 0;
+  for (; us < 3000000 && !spring.settled(); us += 16000) peak = Math.max(peak, spring.rect(us)[3]);
+  assert.ok(peak > 300 && peak < 340, `peak ${peak}`);
+  assert.ok(spring.settled(), 'settled');
+  assert.deepEqual(spring.rect(us), [0, 0, 100, 300]);
+});

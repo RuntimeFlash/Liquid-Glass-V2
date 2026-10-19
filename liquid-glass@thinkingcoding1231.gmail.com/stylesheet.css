@@ -203,7 +203,6 @@
 /* The launcher: a search field and its results on one sheet of glass. */
 .liquid-glass-launcher {
     padding: 10px;
-    spacing: 6px;
     color: #ffffff;
 }
 
@@ -1015,4 +1014,73 @@
 }
 .liquid-glass-editor-action-primary:hover {
     background-color: #2f95ff !important;
+}
+
+.liquid-glass-launcher .lg-launcher-page {
+    spacing: 6px;
+}
+
+.liquid-glass-launcher .lg-launcher-pin {
+    color: inherit;
+    padding: 2px;
+    border-radius: 6px;
+}
+
+.liquid-glass-launcher .lg-launcher-pin:hover {
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.liquid-glass-launcher .lg-launcher-header {
+    spacing: 10px;
+    padding: 4px 4px 6px;
+}
+
+.liquid-glass-launcher .lg-launcher-back {
+    color: inherit;
+    padding: 8px;
+    border-radius: 99px;
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.liquid-glass-launcher .lg-launcher-back:hover {
+    background-color: rgba(255, 255, 255, 0.24);
+}
+
+.liquid-glass-launcher .lg-launcher-title {
+    font-size: 15pt;
+    font-weight: bold;
+}
+
+.liquid-glass-launcher .lg-launcher-section {
+    font-size: 10pt;
+    font-weight: bold;
+    padding: 6px 12px 2px;
+}
+
+.liquid-glass-launcher .lg-launcher-grid-row {
+    spacing: 8px;
+}
+
+.liquid-glass-launcher .lg-launcher-tile {
+    padding: 8px;
+    border-radius: 22px;
+    color: inherit;
+    background-color: transparent;
+}
+
+.liquid-glass-launcher .lg-launcher-tile:selected {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.liquid-glass-launcher .lg-launcher-tile-box {
+    spacing: 8px;
+}
+
+.liquid-glass-launcher .lg-launcher-tile-name {
+    font-size: 10pt;
+}
+
+.liquid-glass-launcher .lg-launcher-empty {
+    font-size: 11pt;
+    padding: 24px;
 }
