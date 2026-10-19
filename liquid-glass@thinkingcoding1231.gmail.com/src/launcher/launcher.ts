@@ -653,6 +653,7 @@ export class Launcher {
     }
     const cancellable = new Gio.Cancellable();
     this._cancellable = cancellable;
+    if (this._settleId) GLib.Source.remove(this._settleId);
     this._settleId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, SETTLE_MS, () => {
       this._settleId = 0;
       this._commit();

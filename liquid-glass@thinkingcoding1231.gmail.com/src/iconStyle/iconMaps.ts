@@ -140,6 +140,7 @@ export class IconMaps {
       await worker.request({ file: path, cache: cache.get_path() });
     } finally {
       if (--this._jobs === 0) {
+        if (this._idleId) GLib.Source.remove(this._idleId);
         this._idleId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, IDLE_DELAY_MS, () => {
           this._idleId = 0;
           this._busy = false;

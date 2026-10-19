@@ -192,6 +192,7 @@ export class WeatherWidget extends GlassCard {
   // Asks again every REFRESH_S.
   private _every(fn: () => void): void {
     fn();
+    if (this._timerId) GLib.Source.remove(this._timerId);
     this._timerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, REFRESH_S, () => {
       fn();
       return GLib.SOURCE_CONTINUE;
