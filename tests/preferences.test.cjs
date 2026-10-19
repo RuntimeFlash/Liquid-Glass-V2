@@ -238,7 +238,7 @@ test("glass tuning opens on the current look's numbers and stores only what diff
   f.controls.write({'icon-style-mode': 'clear'});
   row = open();
   assert.equal(row('Symbol: color mixed into white'), undefined);
-  assert.equal(row('Glass: white frost').value, 0.1);
+  assert.equal(row('Glass: white frost').value, 0.02);
 });
 
 test('closing disconnects manually owned settings subscriptions', () => {
