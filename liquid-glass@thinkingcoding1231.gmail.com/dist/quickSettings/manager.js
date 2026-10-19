@@ -12,7 +12,12 @@ import { CustomQuickSettingsRenderer } from './customQuickSettings.js';
 import { QuickSettingsStampAnimation } from './quickSettingsAnimation.js';
 import { isActorValid } from '../actors/lifecycle.js';
 import { BackdropGlass } from '../rendering/backdropGlass.js';
-import { hexToColorArray } from '../animation/colors.js';
+import { hexToColorArray, adaptiveColorTweener } from '../animation/colors.js';
+// The card-backing sync's timer period: short while something is changing,
+// longer once the menu has been idle (the syncs themselves stay 750ms apart
+// then; the timer only has to notice an animation ending or the menu closing).
+const CARD_BACKING_ACTIVE_MS = 16;
+const CARD_BACKING_IDLE_WAKE_MS = 100;
 // Transparent padding outside the glass area.
 // This prevents the shader distortion or rounded corners from being clipped by the actor bounds.
 const SHADER_PADDING = 20;
@@ -66,6 +71,10 @@ export class QuickSettingsManager {
     _cardBackingLastSignature;
     _cardBackingStableFrames;
     _cardBackingIdleMode;
+    // The card-backing timer's current period and callback, so the period can
+    // follow the idle state; see _setCardBackingInterval().
+    _cardBackingIntervalMs;
+    _cardBackingTick;
     _hiddenMenuParts;
     _signals;
     _animSignalId = 0;
@@ -201,6 +210,8 @@ export class QuickSettingsManager {
         this._cardBackingLastSignature = '';
         this._cardBackingStableFrames = 0;
         this._cardBackingIdleMode = false;
+        this._cardBackingIntervalMs = 0;
+        this._cardBackingTick = null;
         this._hiddenMenuParts = new Map();
         this._disabledClipActors = new Map();
         this._floatingWindow = null;
@@ -1002,9 +1013,23 @@ export class QuickSettingsManager {
         if (this._cardBackingSyncId !== 0) {
             this._syncCardBackings();
             this._cardBackingLastSignature = this._getCardBackingSignature();
+            this._setCardBackingInterval(CARD_BACKING_ACTIVE_MS);
             return;
         }
         this._startCardBackingSync();
+    }
+
+    // Changes the period of the card-backing timer. Idle, nothing is due for
+    // 750ms, so the timer only has to look often enough to notice an animation
+    // ending or the menu closing; a 16ms period there is 60 empty wakeups a
+    // second. Waking it needs the short period back at once.
+    _setCardBackingInterval(ms) {
+        if (this._cardBackingSyncId === 0 || this._cardBackingTick === null ||
+            this._cardBackingIntervalMs === ms)
+            return;
+        GLib.source_remove(this._cardBackingSyncId);
+        this._cardBackingIntervalMs = ms;
+        this._cardBackingSyncId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, this._cardBackingTick);
     }
 
     _startCardBackingSync() {
@@ -1019,6 +1044,8 @@ export class QuickSettingsManager {
         let syncTick = () => {
             if (!this.menu?.actor?.mapped && !this._isAnimating) {
                 this._cardBackingSyncId = 0;
+                this._cardBackingTick = null;
+                this._cardBackingIntervalMs = 0;
                 return GLib.SOURCE_REMOVE;
             }
             // During animation, the animation loop handles card sync directly via frozen positions.
@@ -1045,6 +1072,15 @@ export class QuickSettingsManager {
                 this._cardBackingIdleMode = false;
                 this._cardBackingLastSignature = signature;
             }
+            // A stop during the sync ends the timer for good.
+            if (this._cardBackingTick !== syncTick)
+                return GLib.SOURCE_REMOVE;
+            const want = this._cardBackingIdleMode ? CARD_BACKING_IDLE_WAKE_MS : CARD_BACKING_ACTIVE_MS;
+            if (want !== this._cardBackingIntervalMs) {
+                this._cardBackingIntervalMs = want;
+                this._cardBackingSyncId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, want, syncTick);
+                return GLib.SOURCE_REMOVE;
+            }
             return GLib.SOURCE_CONTINUE;
         };
         // The backdrop is live before the first 16ms tick so the menu's first
@@ -1052,7 +1088,9 @@ export class QuickSettingsManager {
         // current afterwards without any window-set token of our own.
         this._syncCardBackings();
         this._cardBackingLastSignature = this._getCardBackingSignature();
-        this._cardBackingSyncId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, syncTick);
+        this._cardBackingTick = syncTick;
+        this._cardBackingIntervalMs = CARD_BACKING_ACTIVE_MS;
+        this._cardBackingSyncId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, CARD_BACKING_ACTIVE_MS, syncTick);
     }
 
     _stopCardBackingSync(keepFrozen = false) {
@@ -1060,6 +1098,8 @@ export class QuickSettingsManager {
             GLib.source_remove(this._cardBackingSyncId);
             this._cardBackingSyncId = 0;
         }
+        this._cardBackingTick = null;
+        this._cardBackingIntervalMs = 0;
         this._cardBackingIdleMode = false;
         this._cardBackingStableFrames = 0;
         this._cardBackingLastSignature = '';
@@ -2309,10 +2349,7 @@ export class QuickSettingsManager {
             // if (origStyle) this._styledActors.set(actor, origStyle);
             this._styledActors.set(actor, origStyle || '');
             actor.connect('destroy', () => {
-                if (actor._colorTweenId) {
-                    GLib.source_remove(actor._colorTweenId);
-                    actor._colorTweenId = undefined;
-                }
+                adaptiveColorTweener.cancel(actor);
                 this._styledActors.delete(actor);
             });
         }
@@ -2335,10 +2372,7 @@ export class QuickSettingsManager {
         // Restore each actor's original inline style.
         for (const [actor, originalStyle] of this._styledActors.entries()) {
             if (actor && typeof actor.set_style === 'function') {
-                if (actor._colorTweenId) {
-                    GLib.source_remove(actor._colorTweenId);
-                    actor._colorTweenId = undefined;
-                }
+                adaptiveColorTweener.cancel(actor);
                 actor._currentTargetColor = undefined;
                 actor._currentInsensitiveState = undefined;
                 actor.remove_style_class_name('adaptive-text-transition');
@@ -2353,10 +2387,7 @@ export class QuickSettingsManager {
         const currentTargets = this._collectAdaptiveTextTargets();
         for (let actor of currentTargets) {
             if (actor && typeof actor.set_style === 'function') {
-                if (actor._colorTweenId) {
-                    GLib.source_remove(actor._colorTweenId);
-                    actor._colorTweenId = undefined;
-                }
+                adaptiveColorTweener.cancel(actor);
                 actor._currentTargetColor = undefined;
                 actor._currentInsensitiveState = undefined;
                 actor.set_style(null);
@@ -2435,11 +2466,8 @@ export class QuickSettingsManager {
     _animateActorColor(actor, targetHexColor, isInsensitive, durationMs = 380, skipAnimations = false) {
         if (!actor || Object.keys(actor).length === 0)
             return;
-        // Cancel any existing color tween if running (handles mid-transition target changes).
-        if (actor._colorTweenId) {
-            GLib.source_remove(actor._colorTweenId);
-            actor._colorTweenId = undefined;
-        }
+        // A tween already running is not cancelled here: add() restarts from the
+        // colour it last applied, which handles a target change mid-transition.
         // --- Retrieve the "actual physical color" currently displayed on screen ---
         // This allows smooth transitions starting directly from the default theme colors.
         let themeNode = actor.get_theme_node();
@@ -2451,40 +2479,25 @@ export class QuickSettingsManager {
         let origStyle = this._styledActors.get(actor) || '';
         let stylePrefix = origStyle ? `${origStyle} ` : '';
         if (skipAnimations) {
+            adaptiveColorTweener.cancel(actor);
             let alphaStr = targetAlpha.toFixed(3);
             let targetRgba = `rgba(${targetRgb.r}, ${targetRgb.g}, ${targetRgb.b}, ${alphaStr})`;
             actor.set_style(`${stylePrefix}color: ${targetRgba}; -st-icon-foreground-color: ${targetRgba};`);
             return;
         }
-        let startTime = GLib.get_monotonic_time();
-        // let durationMs = 380; // Animation duration in milliseconds
-        actor._colorTweenId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 32, () => {
-            if (!actor || Object.keys(actor).length === 0)
-                return GLib.SOURCE_REMOVE;
-            let currentTime = GLib.get_monotonic_time();
-            let elapsedMs = (currentTime - startTime) / 1000;
-            let progress = Math.min(elapsedMs / durationMs, 1.0);
-            // Standard ease-in-out easing function
-            let easeProgress = progress < 0.5
-                ? 2 * progress * progress
-                : 1 - Math.pow(-2 * progress + 2, 2) / 2;
-            // Linearly interpolate (lerp) each RGB channel individually
-            let r = Math.round(startColor.red + (targetRgb.r - startColor.red) * easeProgress);
-            let g = Math.round(startColor.green + (targetRgb.g - startColor.green) * easeProgress);
-            let b = Math.round(startColor.blue + (targetRgb.b - startColor.blue) * easeProgress);
-            // Interpolate alpha and build the rgba() string.
-            let a = startAlpha + (targetAlpha - startAlpha) * easeProgress;
-            a = Math.max(0.0, Math.min(1.0, a)); // Clamp to 0..1.
-            let alphaStr = a.toFixed(3); // Three decimals is enough for CSS.
-            let currentRgba = `rgba(${r}, ${g}, ${b}, ${alphaStr})`;
-            // Override text color and icon foreground color directly using inline CSS
-            actor.set_style(`${stylePrefix}color: ${currentRgba}; -st-icon-foreground-color: ${currentRgba};`);
-            // Check for animation completion
-            if (progress >= 1.0) {
-                actor._colorTweenId = undefined;
-                return GLib.SOURCE_REMOVE;
-            }
-            return GLib.SOURCE_CONTINUE;
+        // Stepped by the shared frame-driven tweener, as in the other managers,
+        // instead of a 32ms GLib timer that beats against the frame. A plain RGB
+        // interpolation (crossFade: false) keeps this menu's look as it was.
+        const startRgb = { r: startColor.red, g: startColor.green, b: startColor.blue };
+        adaptiveColorTweener.add(actor, {
+            startRgb, startAlpha,
+            targetRgb, targetAlpha,
+            crossFade: false,
+            durationMs,
+            apply: (r, g, b, a) => {
+                const rgba = `rgba(${r}, ${g}, ${b}, ${a.toFixed(3)})`;
+                actor.set_style(`${stylePrefix}color: ${rgba}; -st-icon-foreground-color: ${rgba};`);
+            },
         });
     }
 

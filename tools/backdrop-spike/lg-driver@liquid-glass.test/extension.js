@@ -5,6 +5,7 @@
 // Scenarios ($LG_DRV_SCENARIO):
 //   dock       the dock over windows, a changing background and UI actors
 //   ui         the calendar menu, Quick Settings, a notification and the OSD
+//              (LG_DRV_FEATURES=qsdrill adds a pointer click on a QS card)
 //   toggles    Quick Settings in toggle mode
 //   fullstage  how many frames redraw the whole stage while the calendar opens
 //   monitor    global._lgGlass.monitor() while windows move and a menu opens
@@ -21,7 +22,8 @@
 //              widgets, the glass clock and the launcher, on a photo wallpaper
 //              ($LG_DRV_WALLPAPER); LG_DRV_FEATURES picks parts (comma
 //              separated: morph, topbar, widgets, clock, launcher; default all;
-//              also morphtrace, qssub, clockshot, media, guides, launcherpointer,
+//              also morphtrace, qssub, clockshot, media, guides,
+//              launcherpointer,
 //              launchercolor, iconstyle; iconstyle needs LG_DTD_DIR)
 //   bench      global._lgBench.run() (run-glass.sh with LG_BENCH=1); LG_DRV_BENCH
 //              picks scenarios (comma separated, default all), LG_DRV_BENCH_SECONDS
@@ -53,9 +55,12 @@ const LG_UUID_DEFAULT = 'liquid-glass@thinkingcoding1231.gmail.com';
 // the directory this checkout lives in; find the enabled Liquid Glass instead.
 let LG_UUID = LG_UUID_DEFAULT;
 function resolveLgUuid() {
-  for (const extension of Main.extensionManager.extensions ?? []) {
-    if (extension.metadata?.name === 'Liquid Glass')
-      return extension.uuid;
+  // GNOME 51's ExtensionManager has no public `extensions` array: it keeps its
+  // Extension objects in a private map and exposes lookup()/getUuids().
+  const manager = Main.extensionManager;
+  for (const uuid of manager.getUuids?.() ?? []) {
+    if (manager.lookup(uuid)?.metadata?.name === 'Liquid Glass')
+      return uuid;
   }
   return LG_UUID_DEFAULT;
 }
@@ -334,6 +339,24 @@ export default class LgDriver extends Extension {
     return Extension.lookupByUUID(LG_UUID).getSettings();
   }
 
+  // The driver is enabled in the same pass as Liquid Glass, and extensions load
+  // one at a time, so a scenario that starts straight away can run before LG is
+  // in the manager. Wait for it before touching its settings. The default uuid
+  // above is only a guess: the shell loads whatever metadata.json declares, so
+  // re-resolve while waiting instead of polling the wrong uuid.
+  async _waitForLg() {
+    for (let i = 0; i < 80; i++) {
+      const byName = resolveLgUuid();
+      if (byName !== LG_UUID_DEFAULT)
+        LG_UUID = byName;
+      if (Extension.lookupByUUID?.(LG_UUID))
+        return;
+      await sleep(250);
+    }
+    log(`waitForLg: gave up with LG_UUID=${LG_UUID} loaded=` +
+      JSON.stringify((Main.extensionManager.extensions ?? []).map(e => e.uuid)));
+  }
+
   // Rebuilds one surface's glass by switching it off and on.
   async _rebuild(key) {
     const settings = this._lgSettings();
@@ -575,7 +598,7 @@ export default class LgDriver extends Extension {
     log(`${tag} region=${JSON.stringify(region)} opening: ${opening}`);
     await this._shots(`${tag} open`, region, owner);
     await this._idle(tag, owner, 1500);
-    keepOpen();
+    await keepOpen();
     await sleep(200);
     const behind = this._behind(owner, region);
     await sleep(300);
@@ -605,9 +628,27 @@ export default class LgDriver extends Extension {
 
   async _uiScenario() {
     const dateMenu = Main.panel.statusArea.dateMenu.menu;
-    await this._surface('m1 calendar', 'menu', () => dateMenu.open(true), () => dateMenu.close(true));
     const qs = Main.panel.statusArea.quickSettings.menu;
-    await this._surface('q1 quick-settings', 'quick-settings', () => qs.open(true), () => qs.close(true));
+    const drill = (GLib.getenv('LG_DRV_FEATURES') ?? '').split(',').includes('qsdrill');
+    let pointer = null;
+    if (drill) {
+      pointer = (SHELL_MAJOR >= 48 ? global.stage.context.get_backend() : Clutter.get_default_backend())
+        .get_default_seat().create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+      // A fresh virtual pointer starts in the hot corner, which opens the
+      // overview and would dismiss every menu below; park it in the middle and
+      // turn hot corners off first.
+      new Gio.Settings({schema_id: 'org.gnome.desktop.interface'}).set_boolean('enable-hot-corners', false);
+      const m = Main.layoutManager.primaryMonitor;
+      pointer.notify_absolute_motion(GLib.get_monotonic_time(), m.x + m.width / 2, m.y + m.height / 2);
+      await sleep(300);
+      if (Main.overview.visible) {
+        Main.overview.hide();
+        await sleep(1200);
+      }
+    }
+    await this._surface('m1 calendar', 'menu', () => dateMenu.open(true), () => dateMenu.close(true));
+    await this._surface('q1 quick-settings', 'quick-settings', () => qs.open(true), () => qs.close(true),
+      drill ? () => this._qsDrill(qs, pointer) : () => {});
     await this._surface('n1 notification', 'notification',
       () => Main.notify('Liquid Glass driver', 'A banner over the desktop'),
       () => {
@@ -622,6 +663,61 @@ export default class LgDriver extends Extension {
     await this._surface('o1 osd', 'osd', showOsd, () => Main.osdWindowManager.hideAll(), showOsd);
 
     await this._menuShot('m2 calendar-again', dateMenu, 'menu');
+  }
+
+  // A real pointer click on a Quick Settings card has to open Liquid Glass's
+  // floating submenu. The click goes through St's captured-event handling and
+  // the extension's drill-down, which the qssub feature part does not exercise
+  // (it opens the native menu directly). Called while the ui scenario's Quick
+  // Settings surface is open and laid out.
+  async _qsDrill(qs, pointer) {
+    const m = Main.layoutManager.primaryMonitor;
+    const lgExt = Extension.lookupByUUID(LG_UUID);
+    const qsm = lgExt.stateObj?._quickSettingsManager ?? lgExt._quickSettingsManager;
+    const t = () => GLib.get_monotonic_time();
+    const brief = c => `${c.constructor.name}[${(c.get_style_class_name?.() ?? '').split(/\s+/).filter(s => s.startsWith('liquid-glass-card')).join('|')}]`;
+    const all = [...(qsm._cardActors ?? [])];
+    log(`qsdrill: qs.isOpen=${qs.isOpen} mapped=${qs.actor.mapped} children=${all.length} glass=${!!qsm._glass}`);
+    for (const c of all) {
+      const [p0, p1] = c.get_transformed_position();
+      const [s0, s1] = c.get_transformed_size();
+      log(`qsdrill:   ${brief(c)} menu=${!!(c.menu || c._menu)} mapped=${c.mapped} visible=${c.visible} ` +
+        `reactive=${c.reactive} at=${Math.round(p0)},${Math.round(p1)} size=${Math.round(s0)}x${Math.round(s1)} ` +
+        `drill=${!!c._liquidGlassDrilldownConnected} keep=${!!c._liquidGlassKeepNativeMenuButton}`);
+    }
+    const hasCardClass = c => (c.get_style_class_name?.() ?? '').split(/\s+/).includes('liquid-glass-card');
+    // Prefer a card with the LG drill-down, then one whose card class is the
+    // wide (submenu-carrying) shape, then anything the glass owns.
+    const card = all.find(c => c._liquidGlassDrilldownConnected && c.visible && c.mapped) ??
+      all.find(c => c.menu?.actor && c.visible && c.mapped) ??
+      all.find(c => hasCardClass(c) && c.get_style_class_name().includes('squircle') && c.visible && c.mapped) ??
+      all.find(c => hasCardClass(c) && c.visible && c.mapped);
+    if (!card) {
+      log('qsdrill: no card to click');
+      return;
+    }
+    const [x, y, w, h] = [...card.get_transformed_position(), ...card.get_transformed_size()].map(Math.round);
+    let hit = null;
+    try { card.connect('clicked', () => { hit = 'clicked'; }); } catch (e) {}
+    const picked = global.stage.get_actor_at_pos(Clutter.PickMode.REACTIVE, x + w / 2, y + h / 2);
+    log(`qsdrill: clicking ${card.title ?? card.label ?? card.constructor.name} ${brief(card)} at ${x + w / 2},${y + h / 2} ` +
+      `pick=${picked?.constructor?.name ?? 'null'} "${(picked?.get_style_class_name?.() ?? '').split(/\s+/).filter(Boolean).slice(0, 3).join('|')}"`);
+    pointer.notify_absolute_motion(t(), x + w / 2, y + h / 2);
+    await sleep(150);
+    pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
+    await sleep(80);
+    pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
+    await sleep(2000);
+    const panel = qsm._submenuRenderer?._floatingWindow;
+    const rows = panel?.content?.get_n_children?.() ?? -1;
+    log(`qsdrill: swayEvent=${hit ?? 'none'} floatingWindow=${!!panel} panelChildren=${rows} ` +
+      `qsOpen=${qs.isOpen} nativeMenuOpen=${!!card.menu?.isOpen}`);
+    // The regression this part exists for: the card's click reached the LG
+    // renderer but the floating window never came up, so the click looked dead.
+    log(`qsdrill: ${hit === 'clicked' && panel ? 'RESULT ok' : 'RESULT FAILED'} — clicked=${hit ?? 'none'} submenu=${!!panel}`);
+    await shot('qs-drilldown', [m.x + m.width - 700, m.y, 700, 900]);
+    try { panel?.close?.(true); } catch (e) {}
+    await sleep(1500);
   }
 
   async _togglesScenario() {
@@ -1917,6 +2013,7 @@ export default class LgDriver extends Extension {
 
   async _featuresScenario() {
     const parts = (GLib.getenv('LG_DRV_FEATURES') ?? 'morph,topbar,widgets,clock,launcher').split(',');
+    await this._waitForLg();
     const settings = this._lgSettings();
     const wallpaper = GLib.getenv('LG_DRV_WALLPAPER');
     if (wallpaper) {

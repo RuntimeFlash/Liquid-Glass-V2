@@ -76,7 +76,7 @@ export class MaterialSettings {
       this._uniforms.set('rim_power', 3.0);
       this._uniforms.set('rim_light_color_intensity', 1.0);
       this._uniforms.set('sheen_intensity', 0.0);
-      this._uniforms.set('light_angle_deg', 90.0);
+      this._setLightAngle(90.0);
       this._uniforms.set('shadow_radius', 50.0);
       this._uniforms.set('shadow_intensity', 0.22);
       this._uniforms.set('ao_intensity', 0.65);
@@ -91,6 +91,21 @@ export class MaterialSettings {
   clear(): void {
     if (this._settings) this._settingsIds.forEach(id => this._settings?.disconnect(id));
     this._settingsIds = [];
+  }
+
+  // The shader takes the light's angle as its cosine and sine, so it does not
+  // evaluate trigonometry for every pixel. light_angle_deg stays set for
+  // anything that reads it back.
+  private _setLightAngle(degrees: number): void {
+    const radians = degrees * Math.PI / 180;
+    this._uniforms.set('light_angle_deg', degrees);
+    this._uniforms.set('light_cos', Math.cos(radians));
+    this._uniforms.set('light_sin', Math.sin(radians));
+  }
+
+  private _setMapped(uniform: string, value: number): void {
+    if (uniform === 'light_angle_deg') this._setLightAngle(value);
+    else this._uniforms.set(uniform, value);
   }
 
   private _bindSettings(): void {
@@ -121,11 +136,11 @@ export class MaterialSettings {
     if (!settings) return;
 
     mappings.forEach(map => {
-      this._uniforms.set(map.uniform, settings.get_double(map.key));
+      this._setMapped(map.uniform, settings.get_double(map.key));
       // Without a repaint only the parts of the glass that something else
       // damaged would pick up the new value.
       const id = settings.connect(`changed::${map.key}`, () => {
-        this._uniforms.set(map.uniform, settings.get_double(map.key));
+        this._setMapped(map.uniform, settings.get_double(map.key));
         this._repaintIfDirty();
       });
       this._settingsIds.push(id);

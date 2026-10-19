@@ -37,6 +37,14 @@ uniform float corner_smoothing_enabled;
 uniform float ao_intensity; // 0 = none, 1 = fully black at the edge
 uniform float ao_radius;    // px inward over which the band fades out
 uniform float light_angle_deg;
+// cos and sin of light_angle_deg, set together with it by MaterialSettings so
+// the shader does not evaluate trigonometry for every pixel.
+uniform float light_cos;
+uniform float light_sin;
+// The light's direction is normalize(vec3(cos, sin, LIGHT_Z)). cos^2 + sin^2
+// is 1, so its length is a constant and no normalize() is needed.
+#define LIGHT_Z 0.38
+#define LIGHT_INV_LEN 0.9347835805883489
 uniform float shadow_radius;
 uniform float shadow_intensity;
 // Room (px) the drop shadow has outside the glass before the actor clips it.
@@ -437,31 +445,47 @@ vec2 stabilizedUV(vec2 candidate, vec2 fallback) {
 
 // Maps a full-actor UV into the blurred sub-rect's UV, clamped 1.2 texels
 // inside it.
+// What blurUV() needs that depends only on uniforms. A pixel can take up to 30
+// backdrop taps, so initBlurUV() derives this once per pixel instead of every
+// tap re-deriving it. Call it before the first blurUV().
+bool g_blurRect;      // blur_rect_* is set; otherwise layer 1 spans the actor
+vec2 g_blurSize;      // size of the area layer 1 covers, px
+vec2 g_blurOrigin;    // its origin in actor-local px
+vec2 g_blurMargin;    // 1.2 texels in, as a fraction of that area
+vec2 g_blurTexSize;   // layer 1's size in texels
+bool g_blurMagnify;   // layer 1 is magnified, so the smooth warp applies
+
+void initBlurUV(vec2 resolution) {
+    g_blurRect = !(blur_rect_w < 1.0 || blur_rect_h < 1.0);
+    if (g_blurRect)
+        g_blurSize = vec2(blur_rect_w, blur_rect_h);
+    else
+        g_blurSize = max(resolution, vec2(1.0));
+    g_blurOrigin = vec2(blur_rect_x, blur_rect_y);
+    g_blurMargin = vec2(1.2) / g_blurSize;
+    g_blurTexSize = vec2(blur_tex_w, blur_tex_h);
+    g_blurMagnify = g_blurTexSize.x >= 2.0 && g_blurTexSize.y >= 2.0 &&
+        min(g_blurSize.x / g_blurTexSize.x, g_blurSize.y / g_blurTexSize.y) > 1.05;
+}
+
 vec2 blurUV(vec2 fullUV, vec2 resolution) {
     vec2 uv;
-    vec2 size;
-    if (blur_rect_w < 1.0 || blur_rect_h < 1.0) {
-        vec2 mFull = vec2(1.2) / max(resolution, vec2(1.0));
-        uv = clamp(fullUV, mFull, vec2(1.0) - mFull);
-        size = max(resolution, vec2(1.0));
+    if (g_blurRect) {
+        uv = clamp((fullUV * resolution - g_blurOrigin) / g_blurSize,
+                   g_blurMargin, vec2(1.0) - g_blurMargin);
     } else {
-        size = vec2(blur_rect_w, blur_rect_h);
-        vec2 m = vec2(1.2) / size;
-        uv = clamp((fullUV * resolution - vec2(blur_rect_x, blur_rect_y)) / size,
-                   m, vec2(1.0) - m);
+        uv = clamp(fullUV, g_blurMargin, vec2(1.0) - g_blurMargin);
     }
 
     // Smooth bilinear magnification: warping the coordinate inside its texel
     // with a smoothstep makes the reconstruction's slope continuous, which
     // removes the staircase plain bilinear leaves on diagonal edges. Skipped
     // at 1:1, where it would only move samples off their texel centres.
-    vec2 texSize = vec2(blur_tex_w, blur_tex_h);
-    if (texSize.x >= 2.0 && texSize.y >= 2.0 &&
-        min(size.x / texSize.x, size.y / texSize.y) > 1.05) {
-        vec2 t = uv * texSize - 0.5;
+    if (g_blurMagnify) {
+        vec2 t = uv * g_blurTexSize - 0.5;
         vec2 f = fract(t);
         f = f * f * (3.0 - 2.0 * f);
-        uv = (floor(t) + 0.5 + f) / texSize;
+        uv = (floor(t) + 0.5 + f) / g_blurTexSize;
     }
     return uv;
 }
@@ -501,7 +525,10 @@ vec3 sampleBackdrop(vec2 uvc, vec2 ext, vec2 texel, vec2 resolution) {
 // +-0.5/255 of noise before the 8-bit output. The blurred backdrop is a very
 // shallow gradient that would otherwise band.
 float ditherLSB(vec2 p) {
-    return (fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
+    // Interleaved gradient noise (Jimenez 2014): one dot and two fract, no
+    // transcendental, and the same result on every driver. Its structured
+    // pattern breaks up banding at least as well as white noise does.
+    return (fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))) - 0.5) / 255.0;
 }
 
 // erfc(x) for x >= 0 (Abramowitz and Stegun 7.1.27, error below 5e-4).
@@ -653,6 +680,10 @@ void main() {
         return;
     }
 
+    // Past the first exit, so the pixels that draw nothing skip this.
+    initBlurUV(resolution);
+    vec3 lightDir = vec3(light_cos, light_sin, LIGHT_Z) * LIGHT_INV_LEN;
+
     // Deep inside, the dome is flat: no displacement, and with a flat normal
     // the rim, the AO band and the shadow all vanish. What is left is the
     // backdrop plus a constant specular and sheen. The threshold clears all of
@@ -680,9 +711,7 @@ void main() {
 
         // Specular and sheen at N = (0, 0, 1): both reduce to the light's z,
         // and specMask to 0.65.
-        vec3 lightDirFlat = normalize(vec3(cos(radians(light_angle_deg)),
-                                           sin(radians(light_angle_deg)), 0.38));
-        float facing = max(lightDirFlat.z, 0.0);
+        float facing = max(lightDir.z, 0.0);
         float specFlat = pow(facing, max(shininess, 1.0)) * specular_intensity * 0.65;
         float sheenFlat = pow(facing, 1.65) * sheen_intensity;
         float lightFlat = (specFlat + sheenFlat) * surface_light_enabled;
@@ -706,8 +735,7 @@ void main() {
     // longer away from the light, and a cool tint instead of pure black.
 
     // Screen-space direction the shadow falls in (y points down).
-    float lightAngleRad = radians(light_angle_deg);
-    vec2 lightDir2D = vec2(cos(lightAngleRad), -sin(lightAngleRad));
+    vec2 lightDir2D = vec2(light_cos, -light_sin);
     vec2 shadowDir   = -lightDir2D;
 
     // 0 on the lit side, 1 opposite the light. The epsilon avoids NaN at the
@@ -871,7 +899,6 @@ void main() {
     // applied below, once the rim light is known.
     float aoMask = 1.0 - smoothstep(0.0, max(ao_radius, 0.001), -d);
 
-    vec3 lightDir = normalize(vec3(cos(lightAngleRad), sin(lightAngleRad), 0.38));
     vec3 viewDir = vec3(0.0, 0.0, 1.0);
     vec3 reflectDir = reflect(-lightDir, normal);
     float response = 1.0;
