@@ -1,5 +1,6 @@
 import Cogl from 'gi://Cogl';
 import { MaterialSettings } from './material.js';
+import { OutlineBinding } from './outline.js';
 import { BlurRenderer } from './blur.js';
 import { ShaderPipelines, configureSamplerLayer, SHAPE_LAYER } from './pipelines.js';
 import { GlassGeometry } from './geometry.js';
@@ -21,6 +22,7 @@ export class GlassRenderer {
     uniforms;
     geometry;
     material;
+    _outline = null;
     _repaint;
     _shapeTexture = null;
 
@@ -33,6 +35,10 @@ export class GlassRenderer {
         this.geometry = new GlassGeometry(this.uniforms.values);
         this.material = new MaterialSettings(params.settings, this.uniforms, this.blur, params.setDiagnostics, () => this._repaintIfDirty());
         this.material.initialize();
+        if (params.settings && params.outline) {
+            this._outline = new OutlineBinding(params.settings, params.outline, this.uniforms, () => this._repaintIfDirty());
+            this._outline.initialize();
+        }
     }
 
     // Compiles the pipelines on the first paint, once a Cogl context exists,
@@ -103,6 +109,8 @@ export class GlassRenderer {
 
     cleanup() {
         this._shapeTexture = null;
+        this._outline?.clear();
+        this._outline = null;
         this.material.clear();
         // Dropping the references frees the textures and pipelines; GJS owns them.
         this.blur.clear();

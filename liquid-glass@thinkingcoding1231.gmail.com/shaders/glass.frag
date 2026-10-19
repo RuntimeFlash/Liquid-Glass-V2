@@ -23,6 +23,11 @@ uniform float rim_power;
 uniform float rim_light_color_intensity;
 uniform float sheen_intensity;
 uniform float shininess;
+// A line of this colour and width (px) along the inside of the glass edge; a width of 0 draws none.
+uniform float outline_width;
+uniform float outline_r;
+uniform float outline_g;
+uniform float outline_b;
 // On/off for the rim, specular and sheen. Application windows turn it off and
 // keep only the drop shadow and the inner AO.
 uniform float surface_light_enabled;
@@ -692,7 +697,7 @@ void main() {
     float interiorThreshold = max(
         max(lensBand + gradientStep(resolution) + smoothZoneEarly,
             edgeFeather * 4.0),
-        max(ao_radius, rim_width));
+        max(max(ao_radius, rim_width), outline_width + 1.0));
     if (early_exit_enabled > 0.5 && debug_view < 0.5 && -d >= interiorThreshold) {
         vec2 uvFlat = stabilizedUV(uv, uv);
 
@@ -953,6 +958,13 @@ void main() {
     // Pixels outside the glass are not drawn, so they skip the conversion.
     if (highlight_backdrop_color > 0.5 && addedLight > 0.0 && alpha > 0.0)
         litColor = backdropHighlight(baseColor, litColor, addedLight);
+
+    // Over the lighting, so the line keeps its colour. Only its inner border
+    // is blended here; the outer one is the glass's own coverage.
+    if (outline_width > 0.0) {
+        float outlineMask = smoothstep(-outline_width - 0.5, -outline_width + 0.5, d);
+        litColor = mix(litColor, vec3(outline_r, outline_g, outline_b), outlineMask);
+    }
 
     // Glass over shadow in premultiplied alpha. Cogl adds src.rgb regardless
     // of src.a, so a colour emitted at zero coverage would tint the whole

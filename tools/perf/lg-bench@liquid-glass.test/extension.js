@@ -3,31 +3,37 @@
 // so tools/perf/glass-monitor.sh can average each one. A development tool.
 //
 // From Looking Glass:
-//   global._lgBench.run('all')                every scenario, B1 to B15
+//   global._lgBench.run('all')                every scenario, B1 to B22
 //   global._lgBench.run('B7')                 one of them ('B9a', ['B2', 'B3'], ...)
 //   global._lgBench.run('all', {ab: true})    once with the glass, then once with no UI glass at all
 //   options:
 //     seconds  measured per scenario (default 30)
 //     settle   waited before measuring (default 4)
-//     modes    any of 'stage' (freshly built glass) and 'none' (no UI glass at all), each run in turn;
+//     modes    any of 'stage' (freshly built glass), 'none' (no UI glass at all) and 'outline' (freshly built
+//              glass with every surface's outline on), each run in turn;
 //              ab: true is ['stage', 'none']. Without either, the glass is used as it is.
 //   global._lgBench.stop()   global._lgBench.list()   global._lgBench.running
 //
 // Each measured second's monitor line carries label=<scenario>/<mode>.
 //
 // While it runs it minimizes every window it did not open, turns the
-// application glass off (it would cover the benchmark's own windows), turns
-// on the glass the scenarios need, switches Quick Settings between background
-// and toggle mode, keeps the screen from blanking and parks the pointer on
-// the left edge. All of that is put back at the end, minimized windows too.
+// application glass off (it would cover the benchmark's own windows) except in
+// the scenarios about it, turns on the glass the scenarios need, switches
+// Quick Settings between background and toggle mode, turns the features a
+// scenario is about (top bar, widgets, launcher, icon glass, ...) on for that
+// scenario only, keeps the screen from blanking and parks the pointer on the
+// left edge. All of that is put back at the end, minimized windows too.
 // The mouse and keyboard should be left alone meanwhile.
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
+import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
+import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 // The checkout's directory name is historical; the shell loads the uuid
@@ -51,9 +57,31 @@ const STILL_IDS = ['lg-bench-still-a', 'lg-bench-still-b'];
 const AWAY_GAP = 300;
 
 const GLASS_KEYS = ['enable-dock-glass', 'enable-menu-glass', 'enable-quick-settings-glass',
-    'enable-notification-glass', 'enable-osd-glass'];
+    'enable-notification-glass', 'enable-osd-glass', 'enable-extra-menu-glass'];
 const APP_GLASS_KEY = 'enable-application-glass';
+const OUTLINE_SURFACES = ['dock', 'menu', 'panel-menu', 'notification', 'quick-settings', 'osd', 'application',
+    'desktop-menu', 'top-bar', 'desktop-widget', 'launcher'];
+// What the scenarios start from, so that what the user has set does not leak
+// into them; the scenarios about a feature turn it on for themselves.
+const BASELINE = {
+    'enable-application-glass': false,
+    'application-glass-all-windows': false,
+    'top-bar-style': 'off',
+    'enable-launcher': false,
+    'enable-desktop-widgets': false,
+    'enable-glass-clock': false,
+    'icon-style-dock': false,
+    'icon-style-launcher': false,
+    'icon-style-app-grid': false,
+    'menu-grow-from-button': false,
+    'panel-menu-grow-from-button': false,
+    ...Object.fromEntries(OUTLINE_SURFACES.map(surface => [`${surface}-outline-enabled`, false])),
+};
+const APP_GLASS = {'enable-application-glass': true, 'application-glass-all-windows': true};
+const ICON_GLASS = {'icon-style-dock': true, 'icon-style-launcher': true, 'icon-style-app-grid': true};
 
+// A scenario's `glass` settings turn on the glass it is about, so the mode
+// without UI glass leaves them out; its `set` settings are applied in every mode.
 const SCENARIOS = [
     {id: 'B1', title: '静止（窓 2 枚）'},
     {id: 'B2', title: '動画が dock の裏', video: 'dock'},
@@ -70,6 +98,35 @@ const SCENARIOS = [
     {id: 'B13', title: '通知バナー（4 秒表示・1 秒消す、の繰り返し）', measure: b => b.notifications()},
     {id: 'B14', title: 'OSD（音量表示を 0.25 秒ごとに更新）', measure: b => b.osd()},
     {id: 'B15', title: 'フルスクリーン動画', video: 'fullscreen'},
+    {id: 'B16a', title: 'トップバー・1 枚（静止）', glass: {'top-bar-style': 'pill'}},
+    {id: 'B16b', title: 'トップバー・3 枚（静止）', glass: {'top-bar-style': 'islands'}},
+    {id: 'B16c', title: 'トップバー・1 枚（動画がバーのすぐ下）', glass: {'top-bar-style': 'pill'}, video: 'bar'},
+    {id: 'B17a', title: 'アプリ窓のガラス・窓 2 枚（静止）', glass: APP_GLASS},
+    {id: 'B17b', title: 'アプリ窓のガラス・窓ドラッグ（dock の上）', glass: APP_GLASS, setup: b => b.dragStart('dock'),
+        measure: b => b.drag('dock')},
+    {id: 'B17c', title: 'アプリ窓のガラス・動画の窓にガラス', glass: APP_GLASS, video: 'away'},
+    {id: 'B18a', title: 'デスクトップウィジェット（天気・予定、静止）', glass: {'enable-desktop-widgets': true},
+        set: {'desktop-widgets': ['weather', 'events']}, settle: 6},
+    {id: 'B18b', title: 'デスクトップのガラス時計（静止）', glass: {'enable-glass-clock': true}, settle: 6},
+    {id: 'B19a', title: 'ランチャーを開いたまま', glass: {'enable-launcher': true}, setup: b => b.openLauncher('')},
+    {id: 'B19b', title: 'ランチャーの開閉（1.5 秒ごと）', glass: {'enable-launcher': true}, measure: b => b.cycleLauncher()},
+    {id: 'B19c', title: 'ランチャーで検索結果を出したまま', glass: {'enable-launcher': true}, setup: b => b.openLauncher('a'),
+        settle: 6},
+    {id: 'B20a', title: 'Clear アイコン・dock（静止）', glass: ICON_GLASS, set: {'icon-style-mode': 'clear'}, settle: 10},
+    {id: 'B20b', title: 'Clear アイコン・アプリ一覧を開いたまま', glass: ICON_GLASS, set: {'icon-style-mode': 'clear'},
+        setup: b => b.showApps(), settle: 10},
+    {id: 'B20c', title: 'Clear アイコン・アプリ一覧のページ送り（1.5 秒ごと）', glass: ICON_GLASS, set: {'icon-style-mode': 'clear'},
+        setup: b => b.showApps(), measure: b => b.cyclePages(), settle: 10},
+    {id: 'B20d', title: 'Clear アイコン・動画が dock の裏', glass: ICON_GLASS, set: {'icon-style-mode': 'clear'}, video: 'dock',
+        settle: 10},
+    {id: 'B21a', title: '他のトップバーメニューを開いたまま', setup: async b => {
+        await b.addPanelMenuButton();
+        await b.open(b.panelMenu);
+    }},
+    {id: 'B21b', title: '他のトップバーメニューの開閉（1 秒ごと）', setup: b => b.addPanelMenuButton(),
+        measure: b => b.cycleMenu(b.panelMenu)},
+    {id: 'B22', title: 'カレンダーが「ボタンから伸びる」開閉（1 秒ごと）', set: {'menu-grow-from-button': true},
+        measure: b => b.cycleMenu(b.calendar)},
 ];
 
 class Aborted extends Error {}
@@ -122,6 +179,10 @@ class Bench {
         this._deadline = 0;
         this._pointer = null;
         this._source = null;
+        this._saved = new Map();
+        this._scenarioBase = new Map();
+        this._panelButton = null;
+        this._launcherModule = null;
     }
 
     get running() {
@@ -136,6 +197,10 @@ class Bench {
         return Main.panel.statusArea.quickSettings.menu;
     }
 
+    get panelMenu() {
+        return this._panelButton.menu;
+    }
+
     list() {
         return SCENARIOS.map(s => `${s.id} ${s.title}`).join('\n');
     }
@@ -148,7 +213,7 @@ class Bench {
             return `no such scenario: ${which}`;
         const opts = {seconds: 30, settle: 4, ab: false, ...options};
         opts.modes ??= opts.ab ? ['stage', 'none'] : [null];
-        if (opts.modes.some(m => m !== null && !['stage', 'none'].includes(m)))
+        if (opts.modes.some(m => m !== null && !['stage', 'none', 'outline'].includes(m)))
             return `unknown mode in ${opts.modes}`;
         this._running = true;
         this._aborted = false;
@@ -195,6 +260,7 @@ class Bench {
                 this._startMonitor();
                 for (const sc of scenarios)
                     await this._scenario(sc, opts);
+                this._applyScenarioSettings({});
             }
             note('done');
         } finally {
@@ -202,7 +268,8 @@ class Bench {
         }
     }
 
-    // Settings, windows and modes to put back afterwards.
+    // Settings, windows and modes to put back afterwards. Liquid Glass's own
+    // settings are saved the first time _put() changes them.
     _saveState() {
         const lgSettings = Extension.lookupByUUID(LG_UUID).getSettings();
         const session = new Gio.Settings({schema_id: 'org.gnome.desktop.session'});
@@ -215,6 +282,8 @@ class Bench {
         this._lgSettings = lgSettings;
         this._session = session;
         this._notifications = notifications;
+        this._saved.clear();
+        this._scenarioBase.clear();
         return {
             saved,
             minimized: [],
@@ -223,12 +292,37 @@ class Bench {
         };
     }
 
+    _put(key, value) {
+        const current = this._lgSettings.get_value(key);
+        if (!this._saved.has(key))
+            this._saved.set(key, current);
+        this._lgSettings.set_value(key, new GLib.Variant(current.get_type_string(), value));
+    }
+
     _applySettings() {
         for (const key of GLASS_KEYS)
-            this._lgSettings.set_boolean(key, true);
-        this._lgSettings.set_boolean(APP_GLASS_KEY, false);
+            this._put(key, true);
+        for (const [key, value] of Object.entries(BASELINE))
+            this._put(key, value);
         this._session.set_uint('idle-delay', 0);
         this._notifications.set_boolean('show-banners', true);
+    }
+
+    // The settings a scenario is about, on top of the baseline: what an
+    // earlier scenario changed goes back first.
+    _applyScenarioSettings(sc) {
+        const wanted = {...(this._mode === 'none' ? {} : sc.glass), ...sc.set};
+        for (const [key, base] of this._scenarioBase) {
+            if (key in wanted)
+                continue;
+            this._put(key, base);
+            this._scenarioBase.delete(key);
+        }
+        for (const [key, value] of Object.entries(wanted)) {
+            if (!this._scenarioBase.has(key))
+                this._scenarioBase.set(key, this._lgSettings.get_value(key).deep_unpack());
+            this._put(key, value);
+        }
     }
 
     async _restore(state) {
@@ -240,8 +334,12 @@ class Bench {
         this._dropNotifications();
         for (const appId of [...this._procs.keys()])
             await this._quit(appId);
+        this._destroyPanelButton();
+        this._closeLauncher();
         for (const [settings, key, value] of state.saved)
             settings.set_value(key, value);
+        for (const [key, value] of this._saved)
+            this._lgSettings.set_value(key, value);
         if (lg() && !state.monitorWasRunning)
             lg().monitorStop();
         for (const win of state.minimized) {
@@ -290,6 +388,7 @@ class Bench {
 
     async _scenario(sc, opts) {
         await this._reset(sc);
+        this._applyScenarioSettings(sc);
         note(`scenario ${sc.id} mode=${this._mode}`);
         if (sc.video)
             await this._showVideo(sc.video);
@@ -297,7 +396,9 @@ class Bench {
             await this._closeVideo();
         if (sc.setup)
             await sc.setup(this);
-        await this._sleep(opts.settle * 1000);
+        await this._sleep((sc.settle ?? opts.settle) * 1000);
+        this._dropNotifications();
+        await this._sleep(600);
         this._deadline = GLib.get_monotonic_time() + opts.seconds * 1e6;
         lg().monitorLabel(`${sc.id}/${this._mode}`);
         try {
@@ -311,6 +412,7 @@ class Bench {
     // fullscreen, the first workspace, both still windows in place.
     async _reset(sc) {
         this._closeMenus(false);
+        this._closeLauncher();
         if (Main.overview.visible) {
             Main.overview.hide();
             await this._sleep(800);
@@ -422,10 +524,16 @@ class Bench {
     }
 
     async _spawn(appId, argv) {
-        const proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE);
+        const proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_PIPE);
         this._procs.set(appId, proc);
+        const stderr = this._readAll(proc.get_stderr_pipe());
         for (let i = 0; i < 100; i++) {
             await this._sleep(100);
+            // A shell that has just started shows the overview, where window actors are hidden.
+            if (Main.overview.visible)
+                Main.overview.hide();
+            // A client that waits for a frame callback gets none from a stage nothing is drawing on.
+            global.stage.queue_redraw();
             const win = findWindow(appId);
             // Placed and stacked only once shown.
             if (win?.get_compositor_private()?.mapped) {
@@ -434,7 +542,14 @@ class Bench {
                 return win;
             }
         }
-        throw new Error(`no window for ${appId}`);
+        const output = await Promise.race([stderr, plainSleep(300).then(() => '(nothing)')]);
+        throw new Error(`no window for ${appId}; ${argv[0]} said: ${output}`);
+    }
+
+    _readAll(stream) {
+        return new Promise(resolve => stream.read_bytes_async(4096, GLib.PRIORITY_DEFAULT, null, (src, res) => {
+            resolve(new TextDecoder().decode(src.read_bytes_finish(res).toArray()).trim());
+        }));
     }
 
     async _spawnStills() {
@@ -501,6 +616,8 @@ class Bench {
             y = Math.round(dock.y + dock.h) - vh;
         } else if (where === 'away') {
             y = Math.max(wa.y + 8, Math.round(dock.y) - AWAY_GAP - vh);
+        } else if (where === 'bar') {
+            y = wa.y;
         } else {
             y = wa.y + 8;
         }
@@ -581,6 +698,68 @@ class Bench {
         } while (await this._tick(1000));
     }
 
+    // A bar menu of some other indicator, like the ones extensions add.
+    async addPanelMenuButton() {
+        if (this._panelButton)
+            return;
+        const button = new PanelMenu.Button(0.5, 'Liquid Glass bench', false);
+        button.add_child(new St.Icon({icon_name: 'applications-system-symbolic', style_class: 'system-status-icon'}));
+        for (let i = 1; i <= 6; i++)
+            button.menu.addMenuItem(new PopupMenu.PopupMenuItem(`Bench item ${i}`));
+        Main.panel.addToStatusArea('lg-bench-menu', button);
+        this._panelButton = button;
+        // The glass is attached to a new indicator's menu after a scan.
+        await this._sleep(2500);
+    }
+
+    _destroyPanelButton() {
+        this._panelButton?.destroy();
+        this._panelButton = null;
+    }
+
+    async _launcher() {
+        this._launcherModule ??= await import(`file://${Extension.lookupByUUID(LG_UUID).path}/dist/launcher/launcher.js`);
+        return this._launcherModule.Launcher.instance;
+    }
+
+    async openLauncher(query) {
+        const launcher = await this._launcher();
+        launcher.open();
+        launcher.setText(query);
+        await this._sleep(500);
+    }
+
+    _closeLauncher() {
+        this._launcherModule?.Launcher.instance?.close();
+    }
+
+    async cycleLauncher() {
+        const launcher = await this._launcher();
+        let open = false;
+        do {
+            open = !open;
+            if (open)
+                launcher.open();
+            else
+                launcher.close();
+        } while (await this._tick(1500));
+        launcher.close();
+    }
+
+    async showApps() {
+        Main.overview.showApps();
+        await this._sleep(1000);
+    }
+
+    // The app grid's first two pages in turn.
+    async cyclePages() {
+        const grid = Main.overview._overview.controls._appDisplay;
+        let page = 0;
+        do
+            grid.goToPage(page ^= 1);
+        while (await this._tick(1500));
+    }
+
     async cycleOverview() {
         do
             Main.overview.toggle();
@@ -623,8 +802,14 @@ class Bench {
         }
     }
 
+    // The bench's own banner, and the one that says glass icons are being made
+    // (the icon scenarios start that).
     _dropNotifications() {
         this._source?.destroy();
+        for (const notification of [...MessageTray.getSystemSource().notifications]) {
+            if (/glass icons/i.test(notification.title))
+                notification.destroy();
+        }
     }
 
     async osd() {
@@ -642,8 +827,8 @@ class Bench {
             lg().monitor(0);
     }
 
-    // 'stage' starts from freshly built glass; 'none' turns the UI glass off;
-    // null keeps what is there.
+    // 'stage' starts from freshly built glass; 'outline' is 'stage' with every
+    // surface's outline on; 'none' turns the UI glass off; null keeps what is there.
     async _useMode(mode) {
         if (mode === null) {
             this._mode = 'stage';
@@ -651,7 +836,9 @@ class Bench {
         }
         this._mode = mode;
         for (const key of GLASS_KEYS)
-            this._lgSettings.set_boolean(key, mode !== 'none');
+            this._put(key, mode !== 'none');
+        for (const surface of OUTLINE_SURFACES)
+            this._put(`${surface}-outline-enabled`, mode === 'outline');
         if (mode === 'none') {
             await this._sleep(1500);
             return;
@@ -660,11 +847,14 @@ class Bench {
     }
 
     // The extension is restarted, as a user would toggle it, so every glass
-    // starts fresh.
+    // starts fresh. Its own enable() and disable() are called, not the shell's
+    // disableExtension(), which would also disable and enable every extension
+    // that came after it, this one included.
     async _rebuildGlass(sleep) {
-        Main.extensionManager.disableExtension(LG_UUID);
+        const extension = Main.extensionManager.lookup(LG_UUID).stateObj;
+        extension.disable();
         await sleep(1000);
-        Main.extensionManager.enableExtension(LG_UUID);
+        extension.enable();
         await sleep(4000);
     }
 }

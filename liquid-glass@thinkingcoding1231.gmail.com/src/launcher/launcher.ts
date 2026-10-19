@@ -189,7 +189,7 @@ export class Launcher {
       x: monitor.x, y: monitor.y, width: monitor.width, height: monitor.height, opacity: 0 });
 
     const glass = new BackdropGlass({
-      extensionPath: this._path, settings: this._settings, logger: this._logger, owner: 'launcher',
+      extensionPath: this._path, settings: this._settings, logger: this._logger, owner: 'launcher', outline: 'launcher',
     } as any);
     glass.setPadding(SHADER_PADDING);
     glass.setIsDock(false);

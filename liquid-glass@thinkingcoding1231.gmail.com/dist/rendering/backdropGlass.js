@@ -44,6 +44,7 @@ export const GlassActor = GObject.registerClass(class GlassActor extends Clutter
             repaint: () => this._queueRepaint(),
             setDiagnostics: enabled => { this._diagEnabled = enabled; },
             shapeTexture: params.shapeTexture,
+            outline: params.outline,
         });
         registerGlass(this);
         this._loadShaders();

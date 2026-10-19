@@ -4,7 +4,7 @@ import { BackdropGlass } from './rendering/backdropGlass.js';
 import { getWindowActors } from './actors/windows.js';
 import { isActorValid } from './actors/lifecycle.js';
 import { getAllocatedSize } from './actors/geometry.js';
-import { setActorVisible, ensureGlassAllocated, ensureWindowActorAllocated } from './actors/allocation.js';
+import { setActorVisible, ensureGlassAllocated, ensureWindowActorAllocated, clearStranded } from './actors/allocation.js';
 import { setPositionIfChanged, setSizeIfChanged } from './actors/writes.js';
 import { isFrameSyncFrozen, SAME_FRAME_WINDOW_US } from './animation/frameSync.js';
 import { hexToColorArray } from './animation/colors.js';
@@ -347,6 +347,7 @@ export class ApplicationManager {
             settings: this._settings,
             logger: this._logger,
             owner: profile,
+            outline: profile,
         });
         glass.set_name('liquid-glass-window');
         glass.setPadding(this._glassMargin);
@@ -421,19 +422,20 @@ export class ApplicationManager {
         state.geomSig = undefined;
     }
 
+    // Returns whether the window moved since the last sync.
     _syncState(state) {
         const actor = state.windowActor;
         if (!actor.get_stage() || !actor.mapped) {
             this._hideGlass(state);
-            return;
+            return false;
         }
         const metaWin = actor.get_meta_window();
         if (!metaWin)
-            return;
+            return false;
         // Folds the repaints of the setters below into one.
         state.glass.beginBatch();
         try {
-            this._syncStateInner(state, actor, metaWin);
+            return this._syncStateInner(state, actor, metaWin);
         }
         finally {
             state.glass.endBatch();
@@ -451,13 +453,13 @@ export class ApplicationManager {
         const winWorkspace = metaWin.get_workspace();
         if (winWorkspace && winWorkspace !== global.workspace_manager.get_active_workspace()) {
             this._hideGlass(state);
-            return;
+            return false;
         }
         const rect = metaWin.get_frame_rect();
         const bufferRect = metaWin.get_buffer_rect();
         if (rect.width <= 0 || rect.height <= 0) {
             this._hideGlass(state);
-            return;
+            return false;
         }
         setActorVisible(state.glass, true);
         const [frameLocalX, frameLocalY] = this._frameLocalOffset(state, actor, rect, bufferRect);
@@ -482,6 +484,7 @@ export class ApplicationManager {
         }
         // Every frame: the windows below move on their own.
         state.glass.syncSources(moved);
+        return moved;
     }
 
     // Stores `values` as the geometry signature and returns whether it was
@@ -529,6 +532,13 @@ export class ApplicationManager {
         const title = metaWin.get_title() || '(untitled)';
         // Names this glass in diagnostic dumps.
         state.glass._diagOwnerLabel = title;
+        // A window that moves, or is animated, has a relayout pending in every
+        // frame this runs in, so only one that stays put can be stranded.
+        if (this._syncState(state)) {
+            clearStranded(state.windowActor);
+            clearStranded(state.glass);
+            return;
+        }
         // The window actor is rescued before the glass. Its children are laid out
         // by its default layout, so a stranded window actor swallows every
         // relayout they queue and the glass's own rescue could never land.
@@ -536,7 +546,6 @@ export class ApplicationManager {
         if (rescue)
             this._logStrand(state, metaWin, title, rescue);
         ensureGlassAllocated(state.glass);
-        this._syncState(state);
     }
 
     _logStrand(state, metaWin, title, rescue) {

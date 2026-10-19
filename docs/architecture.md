@@ -8,7 +8,7 @@ The extension source is in `liquid-glass@thinkingcoding1231.gmail.com/src`.
 | `actors/` | Actor validity, allocation rescue, cached writes, coordinates and custom actor types |
 | `capture/` | Desktop/background capture, UI and window clones, nested glass and capture clipping |
 | `animation/` | Shared spring models (including the motion of a menu growing out of its button), colour interpolation and frame-sync switches |
-| `rendering/` | Blur buffers, pipelines, crop targets, glass extents, uniform caching, material settings and the lens a morphing menu's items are seen through |
+| `rendering/` | Blur buffers, pipelines, crop targets, glass extents, uniform caching, material settings, the per-surface outline (`outline.ts`) and the lens a morphing menu's items are seen through |
 | `diagnostics/` | Logging, the opt-in ring recorder and Looking Glass controls |
 | `quickSettings/toggleStyles.ts` | Toggle discovery, native theme colours, temporary styles and their timer/signal lifetime |
 | `preferences/` | Shared appearance controls, grouped settings writes and application selection; see [Preferences](preferences.md) |

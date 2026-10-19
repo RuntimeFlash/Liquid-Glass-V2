@@ -59,7 +59,8 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
     add_row(child) { this.add(child); }
     append(child) { this.add(child); }
     remove(child) { this.children = this.children.filter(item => item !== child); }
-    add_prefix() {} add_suffix(child) { child._parent = this; } add_css_class() {} set_header_suffix() {} set_default_size() {}
+    add_prefix() {} add_suffix(child) { child._parent = this; this.suffixes = [...(this.suffixes ?? []), child]; }
+    add_css_class(name) { this.cssClasses = [...(this.cssClasses ?? []), name]; } set_header_suffix() {} set_default_size() {}
     get_parent() { return this._parent ?? null; }
     reorder_child_after() {}
     set_child(child) { this.child = child; } set_content(child) { this.content = child; } add_top_bar() {} pack_start() {}
@@ -82,6 +83,8 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
     Scale: Widget, Orientation: {HORIZONTAL: 0},
     SignalListItemFactory: Widget, Box: Widget, Label: Widget, Image: Widget,
     StringList: {new: titles => titles}, Align: {CENTER: 0}, SelectionMode: {NONE: 0},
+    CssProvider: class { load_from_string() {} }, StyleContext: {add_provider_for_display() {}, remove_provider_for_display() {}},
+    STYLE_PROVIDER_PRIORITY_APPLICATION: 600,
     FontDialogButton: Widget, FontDialog: Widget, FontLevel: {FACE: 2},
     accelerator_parse: text => [text.length > 0, text.length > 0 ? 1 : 0, 0]};
   const WEIGHTS = {Light: 300, Regular: 400, SemiBold: 600, Bold: 700};
@@ -113,7 +116,7 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
   const GLib = {Variant, FileTest: {EXISTS: 16}, build_filenamev: parts => parts.join('/'),
     file_test: file => blurMyShell !== null && file === `${bmsSchemas}/gschemas.compiled`,
     get_user_data_dir: () => '/home/test/.local/share', get_system_data_dirs: () => ['/usr/share']};
-  const load = createModuleLoader({Adw, Gtk, Gio, Gdk: {RGBA}, GLib, Pango});
+  const load = createModuleLoader({Adw, Gtk, Gio, Gdk: {RGBA, Display: {get_default: () => ({})}}, GLib, Pango});
   const settings = new Settings(); const window = new Widget();
   const {buildPreferences} = load(path.join(root, 'preferences/pages.js'));
   const controls = buildPreferences(window, settings);
@@ -121,10 +124,10 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
     row: title => widgets.find(widget => widget.title === title)};
 }
 
-test('preferences expose four pages and eight shared appearance controls', () => {
+test('preferences expose four pages and eleven shared appearance controls', () => {
   const f = fixture();
   assert.deepEqual(f.window.children.map(page => page.title), ['Appearance', 'Effects', 'Desktop', 'Rendering']);
-  assert.equal(f.window.children[0].children.filter(group => !['Settings', 'Backup'].includes(group.title) && group.visible !== false).flatMap(group => group.children).length, 8);
+  assert.equal(f.window.children[0].children.filter(group => !['Settings', 'Backup'].includes(group.title) && group.visible !== false).flatMap(group => group.children).length, 11);
   assert.equal(f.widgets.filter(widget => /Spring|Sample Interval|X Offset|Y Offset/.test(widget.title ?? '')).length, 0);
   assert.equal(f.window.search_enabled, true);
 });
@@ -305,6 +308,60 @@ test('advanced top bar group owns its style and shows spacing only for pills', (
   assert.equal(margin.visible, true);
   style.selected = 0;
   assert.equal(padding.visible, false);
+});
+
+test('the simple view shows the outline width and color only while an outline is on, set in under it', () => {
+  const f = fixture();
+  const group = f.window.children[0].children.find(group => group.title === 'Glass');
+  const [width, color] = ['Outline width', 'Outline color'].map(title => group.children.find(row => row.title === title));
+  assert.equal(width.visible, false);
+  assert.equal(color.visible, false);
+  f.row('Outline').selected = 1;
+  assert.equal(f.values.get('osd-outline-enabled'), true);
+  assert.equal(Object.keys(f.writes.at(-1)).length, 11);
+  assert.equal(width.visible, true);
+  assert.equal(color.visible, true);
+  width.value = 3;
+  assert.equal(f.values.get('launcher-outline-width'), 3);
+  f.controls.write({'dock-outline-enabled': false});
+  assert.match(f.row('Outline').subtitle, /edge/);
+  f.row('Outline').selected = 0;
+  assert.equal(width.visible, false);
+});
+
+test('an advanced surface owns its outline, and its rows fold away under the switch', () => {
+  const f = fixture({'preferences-advanced': true});
+  f.row('Surface').selected = 1;
+  const group = f.window.children[0].children.find(group => group.title === 'Calendar');
+  const row = title => group.children.find(widget => widget.title === title);
+  assert.equal(row('Outline width').visible, false);
+  f.controls.write({'menu-outline-enabled': true});
+  assert.equal(row('Outline width').visible, true);
+  const arrow = row('Outline').suffixes.find(child => child.tooltip_text === 'Fold');
+  assert.ok(arrow, 'a fold arrow sits at the end of the switch row');
+  arrow.emit('clicked');
+  assert.equal(row('Outline width').visible, false);
+  assert.equal(row('Outline color').visible, false);
+  assert.equal(arrow.tooltip_text, 'Unfold');
+  arrow.emit('clicked');
+  assert.equal(row('Outline width').visible, true);
+  f.controls.write({'menu-outline-enabled': false});
+  assert.equal(row('Outline width').visible, false);
+  assert.equal(arrow.visible, false);
+});
+
+test('the animation and adaptive color rows are set in under their switches and fold with them', () => {
+  const f = fixture({'preferences-advanced': true});
+  f.row('Surface').selected = 1;
+  const group = f.window.children[0].children.find(group => group.title === 'Calendar');
+  const indented = group.children.filter(widget => widget.cssClasses?.includes('lg-branch')).map(widget => widget.title);
+  for (const title of ['Grow from the button', 'Spring stiffness', 'Animation interval (ms)', 'Adaptive color interval (ms)',
+    'Preferred text color', 'Outline width', 'Outline color'])
+    assert.ok(indented.includes(title), title);
+  assert.ok(!indented.includes('Animations'));
+  assert.equal(group.children.find(widget => widget.title === 'Spring mass').visible, true);
+  f.controls.write({'enable-menu-animation': false});
+  assert.equal(group.children.find(widget => widget.title === 'Spring mass').visible, false);
 });
 
 test('quick settings has one custom glass grid and no whole/individual mode row', () => {

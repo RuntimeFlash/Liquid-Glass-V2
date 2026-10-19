@@ -105,7 +105,7 @@ cp -r liquid-glass/liquid-glass@thinkingcoding1231.gmail.com ~/.local/share/gnom
 
 ## What Can Be Made of Glass
 
-The effect can be enabled or disabled per UI element on the **Effects** page. In the **Simple** view every element shares one look (blur, corners, tint); switch the view to **Advanced** (Appearance → Settings) to tune each element on its own — tint color and strength, blur radius, corner radius, glass expand, offsets, and brightness / contrast / saturation — plus the element-specific features listed below. Values you tune by eye have a slider next to the number; values whose number is what matters (spring constants, intervals) are typed in.
+The effect can be enabled or disabled per UI element on the **Effects** page. In the **Simple** view every element shares one look (blur, corners, tint, outline); switch the view to **Advanced** (Appearance → Settings) to tune each element on its own — tint color and strength, an **outline** (a line along the visible edge of the glass, shadow not included, to make it easier to see: switch, width and color; the glass clock has none), blur radius, corner radius, glass expand, offsets, and brightness / contrast / saturation — plus the element-specific features listed below. Values you tune by eye have a slider next to the number; values whose number is what matters (spring constants, intervals) are typed in. Settings that depend on a switch (the outline, animations, adaptive color) sit indented below it and fold away with the arrow at the end of the switch's row.
 
 | Element | Notes / Special features |
 | --- | --- |
@@ -181,7 +181,7 @@ Point at a result and a pin appears on its left: click it to pin the result (app
 
 ## Preferences
 
-- **Appearance** — shared blur, corners and tint; animations, adaptive color and matching menu heights; **Backup**, which exports every setting to a file and imports it again.
+- **Appearance** — shared blur, corners, tint and outline; animations, adaptive color and matching menu heights; **Backup**, which exports every setting to a file and imports it again.
 - **Effects** — choose where glass appears: top bar, dock, menus, popups, application icons and application windows. The advanced view lists every surface on its own here, the top bar included.
 - **Desktop** — the glass clock, the desktop widgets and the launcher (its shortcut, width, the height of the pinned items, their icon size and how it changes to them).
 - **Rendering** — rendering quality, refraction, edge lighting, shadows and diagnostics.
@@ -304,9 +304,10 @@ A significant part of this codebase was written with the help of AI coding assis
 - [x] Drop shadow on every Quick Settings grid card
 - [x] Pin launcher results, with a page of pinned items, and work out arithmetic in the launcher
 - [x] Export and import the settings, set the launcher's size and its pinned icons' size, scroll its results, mark applications that are not installed, and keep desktop widgets in a stack when their content changes
+- [x] Outline for the glass of each element, and settings that fold away under their switch in the advanced preferences
 
 ### Next
-- [ ] Publish to extensions.gnome.org (not approved yet)
+- [ ] Publish to extensions.gnome.org
 - [ ] glass-lib: a glass library for apps
 
 ## License

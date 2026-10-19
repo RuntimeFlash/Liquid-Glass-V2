@@ -7,6 +7,7 @@ import {buildAdvancedPreferences} from './advanced.js';
 import {addBlurMyShellWarning} from './blur-my-shell.js';
 import {buildDesktopPage} from './desktop.js';
 import {addBackup} from './backup.js';
+import {Branch} from './branch.js';
 
 function collectGroups(page, build) {
   const added = [];
@@ -49,6 +50,12 @@ export function buildPreferences(window, settings) {
   controls.number(glass, 'Corners', [...sharedKeys('corner-radius')], 0, 200, 1, '', {slider: true});
   controls.color(glass, 'Tint', sharedKeys('tint-color'));
   controls.number(glass, 'Tint strength', sharedKeys('tint-strength'), 0, 1, 0.05, '', {slider: true});
+  const outlineKeys = sharedKeys('outline-enabled');
+  controls.choice(glass, 'Outline', booleanChoices(outlineKeys), 'A line along the visible edge of the glass, for seeing it better');
+  const outline = new Branch(null, {fold: false});
+  outline.add(controls.number(glass, 'Outline width', sharedKeys('outline-width'), 0.5, 10, 0.5, '', {slider: true}));
+  outline.add(controls.color(glass, 'Outline color', sharedKeys('outline-color')));
+  controls.watch(outlineKeys, () => { outline.enabled = outlineKeys.some(key => settings.get_boolean(key)); });
 
   const behavior = controls.group(appearance, 'Behavior');
   controls.choice(behavior, 'Animations', MOTION);

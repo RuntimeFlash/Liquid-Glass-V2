@@ -242,7 +242,7 @@ export class DashManager {
     }
 
     const glass = new BackdropGlass({
-      extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'dock',
+      extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'dock', outline: 'dock',
     } as any);
     this.glass = glass;
     glass.set_size(1.0, 1.0);

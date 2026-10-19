@@ -276,7 +276,7 @@ export class OsdManager {
     targetBox.translation_y = -this._osdYOffset;
 
     const glass = new BackdropGlass({
-      extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'osd',
+      extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'osd', outline: 'osd',
     } as any);
     glass.set_size(1.0, 1.0);
     glass.set_pivot_point(0.0, 0.0);

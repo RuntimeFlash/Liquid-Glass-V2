@@ -7,6 +7,8 @@
 //   ui         the calendar menu, Quick Settings, a notification and the OSD
 //              (LG_DRV_FEATURES=qsdrill adds a pointer click on a QS card)
 //   toggles    Quick Settings in toggle mode
+//   outline    the ui and toggles scenarios with every surface's outline on
+//              (LG_DRV_OUTLINE_WIDTH, default 3, and LG_DRV_OUTLINE_COLOR, default #ff2020)
 //   fullstage  how many frames redraw the whole stage while the calendar opens
 //   monitor    global._lgGlass.monitor() while windows move and a menu opens
 //   lifecycle  disables and enables Liquid Glass with every glass shown once
@@ -31,7 +33,8 @@
 //              $LG_DRV_SETTINGS_DUMP (a dconf dump) and $LG_DRV_ICON_THEME set up the session first
 //   bench      global._lgBench.run() (run-glass.sh with LG_BENCH=1); LG_DRV_BENCH
 //              picks scenarios (comma separated, default all), LG_DRV_BENCH_SECONDS
-//              the seconds per scenario (default 3), LG_DRV_BENCH_AB=1 adds a run without UI glass
+//              the seconds per scenario (default 3), LG_DRV_BENCH_AB=1 adds a run without UI glass,
+//              LG_DRV_BENCH_MODES the modes to run (comma separated: stage, none, outline)
 //
 // Screenshots are off-stage paints, where a stage-reading glass draws with
 // its last on-screen copy. The camera shows what was really on screen: while
@@ -298,8 +301,12 @@ export default class LgDriver extends Extension {
     // Wait for the dock glass to exist *and* to have geometry: it is created a
     // frame or two before its first paint, and a scenario that starts in
     // between bails as if there were no glass at all.
-    for (let i = 0; i < 60 && !(this._glass('dock') && this._region('dock')); i++)
+    for (let i = 0; i < 160 && !(this._glass('dock') && this._region('dock')); i++)
       await sleep(250);
+    if (!lg()) {
+      const states = Main.extensionManager.getUuids().map(uuid => `${uuid}=${Main.extensionManager.lookup(uuid).state}`);
+      log(`Liquid Glass is not running: ${states.join(' ')}`);
+    }
 
     if (SCENARIO === 'dock')
       await this._dockScenario();
@@ -307,6 +314,8 @@ export default class LgDriver extends Extension {
       await this._uiScenario();
     else if (SCENARIO === 'toggles')
       await this._togglesScenario();
+    else if (SCENARIO === 'outline')
+      await this._outlineScenario();
     else if (SCENARIO === 'fullstage')
       await this._fullStageScenario();
     else if (SCENARIO === 'monitor')
@@ -723,6 +732,22 @@ export default class LgDriver extends Extension {
     await shot('qs-drilldown', [m.x + m.width - 700, m.y, 700, 900]);
     try { panel?.close?.(true); } catch (e) {}
     await sleep(1500);
+  }
+
+  async _outlineScenario() {
+    const settings = this._lgSettings();
+    for (const surface of ['dock', 'menu', 'panel-menu', 'notification', 'quick-settings', 'osd', 'application',
+      'desktop-menu', 'top-bar', 'desktop-widget', 'launcher']) {
+      settings.set_boolean(`${surface}-outline-enabled`, true);
+      settings.set_double(`${surface}-outline-width`, Number(GLib.getenv('LG_DRV_OUTLINE_WIDTH') ?? 3));
+      settings.set_string(`${surface}-outline-color`, GLib.getenv('LG_DRV_OUTLINE_COLOR') ?? '#ff2020');
+    }
+    await sleep(800);
+    const dock = this._region('dock');
+    if (dock)
+      await this._shots('d1 dock', dock, 'dock');
+    await this._uiScenario();
+    await this._togglesScenario();
   }
 
   async _togglesScenario() {
@@ -1176,8 +1201,9 @@ export default class LgDriver extends Extension {
   async _benchScenario() {
     const which = GLib.getenv('LG_DRV_BENCH') ?? 'all';
     const seconds = Number(GLib.getenv('LG_DRV_BENCH_SECONDS') ?? 3);
+    const modes = GLib.getenv('LG_DRV_BENCH_MODES')?.split(',');
     log(global._lgBench.run(which === 'all' ? 'all' : which.split(','),
-      {seconds, settle: 2, ab: GLib.getenv('LG_DRV_BENCH_AB') === '1'}));
+      {seconds, settle: 2, ab: GLib.getenv('LG_DRV_BENCH_AB') === '1', ...(modes ? {modes} : {})}));
     await sleep(1000);
     while (global._lgBench.running)
       await sleep(500);

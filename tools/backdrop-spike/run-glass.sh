@@ -104,6 +104,10 @@ dbus-run-session -- bash -c "
   # them need them on.
   gsettings --schemadir '$ext/$lg_uuid/schemas' set org.gnome.shell.extensions.$lg_uuid enable-glass-clock true
   gsettings --schemadir '$ext/$lg_uuid/schemas' set org.gnome.shell.extensions.$lg_uuid enable-desktop-widgets true
+  # The file indexer would index the whole home into the session's cache, and
+  # a launcher search starts it.
+  gsettings set org.freedesktop.Tracker3.Miner.Files index-recursive-directories \"[]\" || true
+  gsettings set org.freedesktop.Tracker3.Miner.Files index-single-directories \"[]\" || true
   gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock dock-fixed true
   gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock intellihide false
   gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock dock-position 'BOTTOM'$dtd_extra

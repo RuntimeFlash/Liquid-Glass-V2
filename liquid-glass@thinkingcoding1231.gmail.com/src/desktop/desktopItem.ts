@@ -102,6 +102,7 @@ export abstract class GlassCard implements DesktopItem {
     this.actor = new St.Widget({ name: `liquid-glass-desktop-${id}`, reactive: true, track_hover: true });
     this.glass = new WallpaperGlass({
       extensionPath: env.path, settings: env.settings, logger: env.logger, owner: `desktop-${id}`,
+      outline: 'desktop-widget',
     } as any);
     this.glass.setPadding(SHADER_PADDING);
     this.glass.setIsDock(false);

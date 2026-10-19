@@ -571,6 +571,7 @@ export class QuickSettingsManager {
 
     glass = new BackdropGlass({
       extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'quick-settings',
+      outline: 'quick-settings',
     } as any) as BackdropGlass;
     glass.setPadding(SHADER_PADDING);
     glass.setIsDock(false);

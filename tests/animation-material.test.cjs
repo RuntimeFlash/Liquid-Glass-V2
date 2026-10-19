@@ -89,3 +89,31 @@ test('material settings initialize downscale before method and disconnect every 
   material.clear(); material.clear();
   assert.equal(handlers.size, 0);
 });
+
+test('an outline follows its surface\'s settings, and a width of 0 is how it is turned off', () => {
+  const { UniformState } = loadModule(path.join(dist, 'rendering/uniforms.js'));
+  const { OutlineBinding } = loadModule(path.join(dist, 'rendering/outline.js'),
+    { GLib: {}, Meta: {}, GObject: { Object: { prototype: {} } } });
+  const handlers = new Map(); let next = 1; let repaints = 0;
+  const values = { 'menu-outline-enabled': false, 'menu-outline-width': 2.5, 'menu-outline-color': '#ff8000' };
+  const settings = {
+    get_string: key => values[key], get_double: key => values[key], get_boolean: key => values[key],
+    connect(name, callback) { const id = next++; handlers.set(id, { name, callback }); return id; },
+    disconnect(id) { assert.ok(handlers.delete(id)); },
+  };
+  const state = new UniformState();
+  const outline = new OutlineBinding(settings, 'menu', state, () => { repaints++; });
+  outline.initialize();
+  assert.equal(state.values.get('outline_width'), 0);
+  assert.equal(state.values.get('outline_g'), 128 / 255);
+  assert.equal(handlers.size, 3);
+  values['menu-outline-enabled'] = true;
+  for (const h of handlers.values()) if (h.name === 'changed::menu-outline-enabled') h.callback();
+  assert.equal(state.values.get('outline_width'), 2.5);
+  assert.equal(repaints, 1);
+  values['menu-outline-color'] = '#000000';
+  for (const h of handlers.values()) if (h.name === 'changed::menu-outline-color') h.callback();
+  assert.equal(state.values.get('outline_r'), 0);
+  outline.clear();
+  assert.equal(handlers.size, 0);
+});

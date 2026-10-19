@@ -81,6 +81,16 @@ export function ensureWindowActorAllocated(
 }
 
 /**
+ * Forgets the frames `actor` has been waiting for an allocation. An actor
+ * that moves has a relayout pending in every frame it is checked in, before
+ * the layout runs, which is not a strand.
+ */
+export function clearStranded(actor: any): void {
+  _strandedFrames.delete(actor);
+  _windowActorStrandedFrames.delete(actor);
+}
+
+/**
  * Remaps one of our own glass actors once it has been stranded for
  * `framesBeforeRescue` frames. Both calls happen before the frame is painted,
  * so there is no flicker. Returns true when a rescue ran.

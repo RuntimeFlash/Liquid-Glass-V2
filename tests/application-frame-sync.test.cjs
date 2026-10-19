@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function fixture() {
+function fixture(overrides = {}) {
   let clock = 0;
   const laters = { added: 0, add() { this.added++; return this.added; }, remove() {} };
   const emitter = () => ({
@@ -32,6 +32,8 @@ function fixture() {
     isFrameSyncFrozen: () => false,
     ensureWindowActorAllocated: () => null,
     ensureGlassAllocated: () => {},
+    clearStranded: () => {},
+    ...overrides,
   };
   const C = new Function(...Object.keys(bindings), `${code}\nreturn ApplicationManager;`)(...Object.values(bindings));
   const manager = new C('/ext', settings, { log() {}, error() {} });
@@ -199,4 +201,21 @@ test('a window on another workspace hides its glass, and cleanup restores the su
   assert.equal(glasses[0].destroyed, true);
   assert.equal(windowActor.handlers.size, 0);
   assert.equal(metaWindow.handlers.size, 0);
+});
+
+test('a window that moved this frame is not rescued as stranded, one that stayed put is', () => {
+  const calls = [];
+  const { manager } = fixture({
+    ensureWindowActorAllocated: () => { calls.push('window'); return ''; },
+    ensureGlassAllocated: () => { calls.push('glass'); },
+    clearStranded: actor => { calls.push(`clear ${actor.name}`); },
+  });
+  const state = { windowActor: { name: 'actor', get_meta_window: () => ({ get_title: () => 'w' }) }, glass: { name: 'glass' } };
+  manager._syncState = () => true;
+  manager._syncFrameState(state);
+  assert.deepEqual(calls, ['clear actor', 'clear glass']);
+  calls.length = 0;
+  manager._syncState = () => false;
+  manager._syncFrameState(state);
+  assert.deepEqual(calls, ['window', 'glass']);
 });

@@ -29,6 +29,11 @@ export class MaterialSettings {
     this._uniforms.set('surface_light_enabled', 1.0);
     // Application windows turn continuous corners off to match the window.
     this._uniforms.set('corner_smoothing_enabled', 1.0);
+    // No outline until a surface's settings ask for one.
+    this._uniforms.set('outline_width', 0.0);
+    this._uniforms.set('outline_r', 1.0);
+    this._uniforms.set('outline_g', 1.0);
+    this._uniforms.set('outline_b', 1.0);
 
     // Where the glass sits inside the actor, which for the UI glass covers
     // the monitor.

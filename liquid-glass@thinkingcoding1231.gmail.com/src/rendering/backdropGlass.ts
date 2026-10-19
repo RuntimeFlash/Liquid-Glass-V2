@@ -25,6 +25,8 @@ export interface GlassActorParams {
   owner?: string;
   // The outline comes from a distance field (setShapeTexture()).
   shapeTexture?: boolean;
+  // The surface whose outline settings this glass follows; none draws no outline.
+  outline?: string;
 }
 
 /**
@@ -84,6 +86,7 @@ export const GlassActor = GObject.registerClass(
         repaint: () => this._queueRepaint(),
         setDiagnostics: enabled => { this._diagEnabled = enabled; },
         shapeTexture: params.shapeTexture,
+        outline: params.outline,
       });
 
       registerGlass(this);

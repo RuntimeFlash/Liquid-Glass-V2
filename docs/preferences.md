@@ -21,6 +21,9 @@ keys those choices own. `controls.js` owns grouped writes, mixed-value readouts 
 subscriptions. `windows.js` owns the application picker and its D-Bus lifetime.
 `advanced-model.js` describes individual controls; `advanced.js` builds the advanced
 view and `panel-menus.js` manages switches for detected top bar menus.
+`branch.js` sets the rows that depend on a switch (animations, adaptive color, the outline)
+in from the left, and folds them with an arrow at the end of the switch's row; `controls.js`
+loads the one CSS rule for that indent and removes it when the window closes.
 The preferences entry point only loads this window; it does not import Shell modules.
 
 Verification:

@@ -11,6 +11,11 @@ export class PreferenceControls {
     this._ids = [];
     this._cleanups = [];
     window.connect('close-request', () => { this.dispose(); return false; });
+    const display = Gdk.Display.get_default();
+    const style = new Gtk.CssProvider();
+    style.load_from_string('.lg-branch box.header { padding-left: 24px; }');
+    Gtk.StyleContext.add_provider_for_display(display, style, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
+    this.onClose(() => Gtk.StyleContext.remove_provider_for_display(display, style));
   }
 
   onClose(callback) { this._cleanups.push(callback); }

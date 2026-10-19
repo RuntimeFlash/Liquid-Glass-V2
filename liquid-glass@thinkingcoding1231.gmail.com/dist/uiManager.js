@@ -649,6 +649,7 @@ export class UIManager {
         // Sized to the monitor by _syncGeometry().
         const glass = new BackdropGlass({
             extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: this._label,
+            outline: this._keyPrefix,
         });
         this.glass = glass;
         glass.set_size(1.0, 1.0);

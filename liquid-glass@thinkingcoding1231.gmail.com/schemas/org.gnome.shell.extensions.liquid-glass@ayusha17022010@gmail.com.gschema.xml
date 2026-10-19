@@ -1184,5 +1184,159 @@
       <description>"morph": the glass flows into its new shape on a spring, with the content seen deep in it; "tween": the glass eases to its new shape and the content fades.</description>
     </key>
 
+    <key name="dock-outline-enabled" type="b">
+      <default>false</default>
+      <summary>Outline on Dock</summary>
+      <description>Draws a line along the visible edge of the glass, inside the shadow, to make it easier to see.</description>
+    </key>
+    <key name="dock-outline-width" type="d">
+      <default>1.0</default>
+      <range min="0.5" max="10"/>
+      <summary>Outline width on Dock</summary>
+    </key>
+    <key name="dock-outline-color" type="s">
+      <default>"#000000"</default>
+      <summary>Outline color on Dock (Hex)</summary>
+    </key>
+    <key name="menu-outline-enabled" type="b">
+      <default>false</default>
+      <summary>Outline on Calendar</summary>
+      <description>Draws a line along the visible edge of the glass, inside the shadow, to make it easier to see.</description>
+    </key>
+    <key name="menu-outline-width" type="d">
+      <default>1.0</default>
+      <range min="0.5" max="10"/>
+      <summary>Outline width on Calendar</summary>
+    </key>
+    <key name="menu-outline-color" type="s">
+      <default>"#000000"</default>
+      <summary>Outline color on Calendar (Hex)</summary>
+    </key>
+    <key name="panel-menu-outline-enabled" type="b">
+      <default>false</default>
+      <summary>Outline on Other top bar menus</summary>
+      <description>Draws a line along the visible edge of the glass, inside the shadow, to make it easier to see.</description>
+    </key>
+    <key name="panel-menu-outline-width" type="d">
+      <default>1.0</default>
+      <range min="0.5" max="10"/>
+      <summary>Outline width on Other top bar menus</summary>
+    </key>
+    <key name="panel-menu-outline-color" type="s">
+      <default>"#000000"</default>
+      <summary>Outline color on Other top bar menus (Hex)</summary>
+    </key>
+    <key name="notification-outline-enabled" type="b">
+      <default>false</default>
+      <summary>Outline on Notifications</summary>
+      <description>Draws a line along the visible edge of the glass, inside the shadow, to make it easier to see.</description>
+    </key>
+    <key name="notification-outline-width" type="d">
+      <default>1.0</default>
+      <range min="0.5" max="10"/>
+      <summary>Outline width on Notifications</summary>
+    </key>
+    <key name="notification-outline-color" type="s">
+      <default>"#000000"</default>
+      <summary>Outline color on Notifications (Hex)</summary>
+    </key>
+    <key name="quick-settings-outline-enabled" type="b">
+      <default>false</default>
+      <summary>Outline on Quick settings</summary>
+      <description>Draws a line along the visible edge of the glass, inside the shadow, to make it easier to see.</description>
+    </key>
+    <key name="quick-settings-outline-width" type="d">
+      <default>1.0</default>
+      <range min="0.5" max="10"/>
+      <summary>Outline width on Quick settings</summary>
+    </key>
+    <key name="quick-settings-outline-color" type="s">
+      <default>"#000000"</default>
+      <summary>Outline color on Quick settings (Hex)</summary>
+    </key>
+    <key name="osd-outline-enabled" type="b">
+      <default>false</default>
+      <summary>Outline on Volume and brightness</summary>
+      <description>Draws a line along the visible edge of the glass, inside the shadow, to make it easier to see.</description>
+    </key>
+    <key name="osd-outline-width" type="d">
+      <default>1.0</default>
+      <range min="0.5" max="10"/>
+      <summary>Outline width on Volume and brightness</summary>
+    </key>
+    <key name="osd-outline-color" type="s">
+      <default>"#000000"</default>
+      <summary>Outline color on Volume and brightness (Hex)</summary>
+    </key>
+    <key name="application-outline-enabled" type="b">
+      <default>false</default>
+      <summary>Outline on Application windows</summary>
+      <description>Draws a line along the visible edge of the glass, inside the shadow, to make it easier to see.</description>
+    </key>
+    <key name="application-outline-width" type="d">
+      <default>1.0</default>
+      <range min="0.5" max="10"/>
+      <summary>Outline width on Application windows</summary>
+    </key>
+    <key name="application-outline-color" type="s">
+      <default>"#000000"</default>
+      <summary>Outline color on Application windows (Hex)</summary>
+    </key>
+    <key name="desktop-menu-outline-enabled" type="b">
+      <default>false</default>
+      <summary>Outline on Desktop menu</summary>
+      <description>Draws a line along the visible edge of the glass, inside the shadow, to make it easier to see.</description>
+    </key>
+    <key name="desktop-menu-outline-width" type="d">
+      <default>1.0</default>
+      <range min="0.5" max="10"/>
+      <summary>Outline width on Desktop menu</summary>
+    </key>
+    <key name="desktop-menu-outline-color" type="s">
+      <default>"#000000"</default>
+      <summary>Outline color on Desktop menu (Hex)</summary>
+    </key>
+    <key name="top-bar-outline-enabled" type="b">
+      <default>false</default>
+      <summary>Outline on Top bar</summary>
+      <description>Draws a line along the visible edge of the glass, inside the shadow, to make it easier to see.</description>
+    </key>
+    <key name="top-bar-outline-width" type="d">
+      <default>1.0</default>
+      <range min="0.5" max="10"/>
+      <summary>Outline width on Top bar</summary>
+    </key>
+    <key name="top-bar-outline-color" type="s">
+      <default>"#000000"</default>
+      <summary>Outline color on Top bar (Hex)</summary>
+    </key>
+    <key name="desktop-widget-outline-enabled" type="b">
+      <default>false</default>
+      <summary>Outline on Desktop widgets</summary>
+      <description>Draws a line along the visible edge of the glass, inside the shadow, to make it easier to see.</description>
+    </key>
+    <key name="desktop-widget-outline-width" type="d">
+      <default>1.0</default>
+      <range min="0.5" max="10"/>
+      <summary>Outline width on Desktop widgets</summary>
+    </key>
+    <key name="desktop-widget-outline-color" type="s">
+      <default>"#000000"</default>
+      <summary>Outline color on Desktop widgets (Hex)</summary>
+    </key>
+    <key name="launcher-outline-enabled" type="b">
+      <default>false</default>
+      <summary>Outline on Launcher</summary>
+      <description>Draws a line along the visible edge of the glass, inside the shadow, to make it easier to see.</description>
+    </key>
+    <key name="launcher-outline-width" type="d">
+      <default>1.0</default>
+      <range min="0.5" max="10"/>
+      <summary>Outline width on Launcher</summary>
+    </key>
+    <key name="launcher-outline-color" type="s">
+      <default>"#000000"</default>
+      <summary>Outline color on Launcher (Hex)</summary>
+    </key>
   </schema>
 </schemalist>

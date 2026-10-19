@@ -168,7 +168,7 @@ export class Launcher {
         const root = new St.Widget({ name: 'liquid-glass-launcher', reactive: true,
             x: monitor.x, y: monitor.y, width: monitor.width, height: monitor.height, opacity: 0 });
         const glass = new BackdropGlass({
-            extensionPath: this._path, settings: this._settings, logger: this._logger, owner: 'launcher',
+            extensionPath: this._path, settings: this._settings, logger: this._logger, owner: 'launcher', outline: 'launcher',
         });
         glass.setPadding(SHADER_PADDING);
         glass.setIsDock(false);
