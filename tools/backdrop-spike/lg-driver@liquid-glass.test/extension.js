@@ -2474,9 +2474,10 @@ export default class LgDriver extends Extension {
       // the slider rows and the cards look. The headless shell has no audio or
       // brightness device, so the three slider rows and some toggles are added.
       settings.set_boolean('output-logs', true);
-      // LG_DRV_LIGHT=1: the light shell theme.
-      if (GLib.getenv('LG_DRV_LIGHT') === '1') {
-        new Gio.Settings({schema_id: 'org.gnome.desktop.interface'}).set_string('color-scheme', 'prefer-light');
+      // LG_DRV_LIGHT=1: the light shell theme; =default: the default colour scheme, under which the shell stays dark.
+      const light = GLib.getenv('LG_DRV_LIGHT');
+      if (light) {
+        new Gio.Settings({schema_id: 'org.gnome.desktop.interface'}).set_string('color-scheme', light === '1' ? 'prefer-light' : light);
         await sleep(2000);
       }
       // LG_DRV_QS_BASE: how much of each toggle's own colour the glass keeps.
@@ -2552,6 +2553,8 @@ export default class LgDriver extends Extension {
       await sleep(1000);
       await this._launcherPins(settings, m, launcher);
     }
+    if (parts.includes('launcherlayout'))
+      await this._launcherLayout(settings, m);
     if (parts.includes('launcherpointer'))
       await this._launcherPointer(settings, m);
     if (parts.includes('launchercolor'))
@@ -2568,6 +2571,96 @@ export default class LgDriver extends Extension {
     Main.extensionManager.enableExtension(LG_UUID);
     await sleep(4000);
     log(`features enabled again: glasses=${lg()?.glassObjects().map(g => g._owner).join(',')}`);
+  }
+
+  // The pinned page at several widths and icon sizes (no tile may be crowded: the pin clear of the icon, the name
+  // inside the tile), and a search taller than the screen (the results scroll, and the panel stays on it), with a
+  // stand-in for GNOME Software's provider that finds one application that is installed and one that is not.
+  async _launcherLayout(settings, m) {
+    const {Launcher} = await this._lgModule('launcher/launcher.js');
+    settings.set_boolean('enable-launcher', true);
+    await sleep(1000);
+    const launcher = Launcher.instance;
+    const apps = Shell.AppSystem.get_default().get_installed().filter(a => a.should_show()).slice(0, 14);
+    settings.reset('launcher-pinned');
+    launcher.open();
+    await sleep(500);
+    for (const info of apps) {
+      launcher._pins.toggle({provider: 'applications', id: info.get_id(), name: info.get_name(), description: '',
+        icon: info.get_icon()?.to_string() ?? ''});
+    }
+    launcher.close();
+    await sleep(500);
+    const within = (a, b) => a.origin.x >= b.origin.x - 0.5 && a.origin.y >= b.origin.y - 0.5 &&
+      a.origin.x + a.size.width <= b.origin.x + b.size.width + 0.5 && a.origin.y + a.size.height <= b.origin.y + b.size.height + 0.5;
+    const apart = (a, b) => a.origin.x + a.size.width <= b.origin.x + 0.5 || b.origin.x + b.size.width <= a.origin.x + 0.5 ||
+      a.origin.y + a.size.height <= b.origin.y + 0.5 || b.origin.y + b.size.height <= a.origin.y + 0.5;
+    for (const width of [320, 680]) {
+      for (const size of [32, 56, 96]) {
+        settings.set_int('launcher-width', width);
+        settings.set_int('launcher-pinned-icon-size', size);
+        launcher.open();
+        await sleep(800);
+        launcher.showView('pinned');
+        await sleep(1500);
+        const tiles = findActors(launcher._panel, a => a.has_style_class_name?.('lg-launcher-tile'));
+        let crowded = 0, rows = new Set(), outside = 0;
+        for (const tile of tiles) {
+          const t = tile.get_transformed_extents();
+          rows.add(Math.round(t.origin.y));
+          const pin = findActors(tile, a => a.has_style_class_name?.('lg-launcher-pin'))[0];
+          const icon = findActors(tile, a => a instanceof St.Icon && !pin.contains(a))[0];
+          const name = findActors(tile, a => a.has_style_class_name?.('lg-launcher-tile-name'))[0];
+          if (!apart(pin.get_transformed_extents(), icon.get_transformed_extents())) crowded++;
+          if (!within(name.get_transformed_extents(), t) || !within(icon.get_transformed_extents(), t)) outside++;
+        }
+        const [pw] = launcher._panel.get_transformed_size();
+        log(`launcher layout: width=${width} icon=${size} panel=${Math.round(pw)} columns=${launcher._columns} tiles=${tiles.length} ` +
+          `tile=${Math.round(tiles[0].width)}x${Math.round(tiles[0].height)} rows=${rows.size} pin over icon=${crowded} content outside tile=${outside}`);
+        await shot(`launcher-layout-${width}-${size}`, [m.x, m.y, m.width, m.height]);
+        launcher.close();
+        await sleep(500);
+      }
+    }
+    settings.reset('launcher-pinned-icon-size');
+    const stand = {
+      id: 'org.gnome.Software.desktop', isRemoteProvider: true, appInfo: {get_name: () => 'Software', get_icon: () => null},
+      getInitialResultSet: async () => ['system/flatpak/flathub/com.example.NotThere/stable', 'system/flatpak/flathub/org.gnome.Settings/stable'],
+      filterResults: ids => ids,
+      getResultMetas: async ids => ids.map(id => ({id, name: id.split('/')[3], description: 'The browser built to be yours',
+        createIcon: size => new St.Icon({icon_name: 'application-x-executable-symbolic', icon_size: size})})),
+      activateResult() {},
+    };
+    const providers = Main.overview.searchController._searchResults._providers;
+    providers.push(stand);
+    for (const width of [680]) {
+      settings.set_int('launcher-width', width);
+      launcher.open();
+      await sleep(800);
+      for (const query of ['a', 'set', 'zzq']) {
+        launcher.setText(query);
+        await sleep(2500);
+        const box = launcher._resultsBox;
+        const [px, py] = launcher._panel.get_transformed_position();
+        const [pw, ph] = launcher._panel.get_transformed_size();
+        const badges = findActors(launcher._panel, a => a.has_style_class_name?.('lg-launcher-badge')).length;
+        log(`launcher search "${query}": results=${launcher._items.length} panel=${[px, py, pw, ph].map(Math.round)} ` +
+          `bottom gap=${Math.round(m.height - py - ph)} scrolls=${box.get_vadjustment().upper > box.get_vadjustment().page_size + 0.5} badges=${badges}`);
+        await shot(`launcher-search-${query}`, [m.x, m.y, m.width, m.height]);
+      }
+      launcher.setText('a');
+      await sleep(2000);
+      const last = launcher._items.length - 1;
+      for (let i = 0; i < last; i++) launcher._select(i + 1);
+      await sleep(500);
+      log(`launcher search last row selected: scrolled to ${Math.round(launcher._resultsBox.get_vadjustment().value)}`);
+      await shot('launcher-search-last', [m.x, m.y, m.width, m.height]);
+      launcher.close();
+      await sleep(500);
+    }
+    providers.splice(providers.indexOf(stand), 1);
+    settings.reset('launcher-width');
+    settings.reset('launcher-pinned');
   }
 
   _finish() {

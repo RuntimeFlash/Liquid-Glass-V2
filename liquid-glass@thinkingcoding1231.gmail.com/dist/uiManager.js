@@ -36,6 +36,8 @@ const CONTENT_LENS = 'liquid-glass-content-lens';
 const SOFT_REFRACTION = 0.3;
 const SOFT_BLUR_RADIUS = 0;
 const MENU_MEASURE_FRAMES = 30;
+// The calendar menu's cards (stylesheet.css).
+const CARD_CLASSES = ['events-button', 'world-clocks-button', 'message'];
 const MENU_MEASURE_STABLE_FRAMES = 3;
 // Quick Settings' open height, measured once for every menu that matches it,
 // and the callbacks waiting for a measurement in progress.
@@ -866,8 +868,16 @@ export class UIManager {
         return this._findAllTextActors(this.menu?.actor);
     }
 
+    // The calendar menu's cards get their text colour from the stylesheet, not from what is behind the glass.
+    _isCard(actor) {
+        return CARD_CLASSES.some(name => this._hasStyleClass(actor, name)) &&
+            !!this.animActor?.has_style_class_name('liquid-glass-menu-root');
+    }
+
     _findAllTextActors(actor, foundActors = []) {
         if (!actor)
+            return foundActors;
+        if (this._isCard(actor))
             return foundActors;
         if (actor instanceof St.Label || actor instanceof Clutter.Text || actor instanceof St.Button || actor instanceof St.Icon) {
             if (actor.visible) {
@@ -1495,9 +1505,9 @@ export class UIManager {
         }
     }
 
-    // The cards in the calendar menu are pale under the light shell theme.
+    // The shell stays dark for the default scheme too, but that scheme asks for light apps, so the cards follow it.
     _syncStyleVariant() {
-        if (Main.getStyleVariant() === 'light')
+        if (St.Settings.get().color_scheme !== St.SystemColorScheme.PREFER_DARK)
             this.animActor.add_style_class_name('liquid-glass-light');
         else
             this.animActor.remove_style_class_name('liquid-glass-light');

@@ -336,8 +336,10 @@ function addLauncher(page, controls) {
     'Ease moves it smoothly and fades the content', false);
   const width = controls.number(group, 'Width', ['launcher-width'], 320, 1400, 10, 'Of the search field and its results', {slider: true});
   const height = controls.number(group, 'Pinned items height', ['launcher-pinned-height'], 240, 1200, 10, '', {slider: true});
+  const iconSize = controls.number(group, 'Pinned icon size', ['launcher-pinned-icon-size'], 32, 96, 4,
+    'Fewer, larger tiles in a narrow launcher; the tiles are spread evenly over the row', {slider: true});
   controls.watch(['enable-launcher'], () => {
-    for (const row of [shortcut, transition, width, height]) row.sensitive = show.active;
+    for (const row of [shortcut, transition, width, height, iconSize]) row.sensitive = show.active;
   });
 }
 

@@ -1138,6 +1138,12 @@
       <summary>Pinned items height</summary>
       <description>The least height of the pinned items page, in logical pixels. The page scrolls past 70% of the screen's height.</description>
     </key>
+    <key name="launcher-pinned-icon-size" type="i">
+      <range min="32" max="96"/>
+      <default>56</default>
+      <summary>Pinned icon size</summary>
+      <description>Size of the application icons on the pinned items page, in logical pixels. The page fits as many columns as its width allows and spreads the tiles over the row.</description>
+    </key>
     <key name="launcher-brightness" type="d">
       <default>1.0</default>
       <summary>Brightness</summary>

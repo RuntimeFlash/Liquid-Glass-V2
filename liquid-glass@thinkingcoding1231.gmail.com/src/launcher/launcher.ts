@@ -23,6 +23,8 @@ import type { Logger } from '../logger.js';
 import type { IconStyler } from '../iconStyle/iconStyler.js';
 import { evaluate, formatNumber } from './calculator.js';
 import { type Pin, PinStore } from './pins.js';
+import { pinnedGrid } from './pinnedGrid.js';
+import { SOFTWARE_PROVIDER, softwareDesktopId } from './software.js';
 
 // The pinned items' page is this much wider than the search.
 const PINNED_EXTRA_WIDTH = 80;
@@ -47,10 +49,10 @@ const TICK_MS = 50;
 const HINT_OPACITY = 178;
 // The pinned page's content scrolls past this share of the monitor's height.
 const PINNED_MAX_HEIGHT = 0.7;
-const GRID_COLUMNS = 5;
 const GRID_SPACING = 8;
-const TILE_ICON_SIZE = 56;
 const PIN_ICON_SIZE = 16;
+// What a tile's pin takes at each side of its icon: the pin, its padding and the tile's padding in stylesheet.css.
+const TILE_SIDE_ROOM = PIN_ICON_SIZE + 4 + 8;
 // Changing page: the old content goes over SWITCH_OUT_MS, then the new comes over SWITCH_IN_MS.
 const SWITCH_OUT_MS = 110;
 const SWITCH_IN_MS = 280;
@@ -58,6 +60,11 @@ const SWITCH_IN_MS = 280;
 const UNPINNABLE = new Set(['org.gnome.Calculator.desktop']);
 // The panel's padding in stylesheet.css.
 const PANEL_PADDING = 10;
+// The search field's height, to place the panel before it has been laid out, and the least room for results.
+const ENTRY_HEIGHT = 56;
+// Between the field and the results: .lg-launcher-page in stylesheet.css.
+const PAGE_SPACING = 6;
+const MIN_RESULTS_HEIGHT = 240;
 
 type View = 'search' | 'pinned';
 
@@ -66,6 +73,8 @@ interface Result {
   provider: any;
   order: number;
   meta: any;
+  // Found by GNOME Software and not installed yet.
+  install?: boolean;
 }
 
 // A row or tile that the arrow keys move between and Enter opens.
@@ -103,6 +112,7 @@ export class Launcher {
   private _panel: St.BoxLayout | null = null;
   private _entry: St.Entry | null = null;
   private _list: St.BoxLayout | null = null;
+  private _resultsBox: St.ScrollView | null = null;
   private _searchBox: St.BoxLayout | null = null;
   private _pinnedBox: St.ScrollView | null = null;
   private _view: View = 'search';
@@ -127,8 +137,9 @@ export class Launcher {
   private _settleId = 0;
   private _results: Result[] = [];
   private _items: Item[] = [];
-  // Of _items on the pinned page, how many are application tiles before the list.
+  // Of _items on the pinned page, how many are application tiles before the list, and in how many columns.
   private _tileCount = 0;
+  private _columns = 1;
   private _selected = 0;
   private _terms: string[] = [];
   private _text: AdaptiveTextColor;
@@ -187,7 +198,7 @@ export class Launcher {
 
     const width = this._panelWidth(false, monitor.width);
     const panel = new St.BoxLayout({ style_class: 'liquid-glass-launcher', reactive: true, can_focus: true, width,
-      x: Math.round((monitor.width - width) / 2), y: Math.round(monitor.height * TOP), ...verticalBoxParams() } as any);
+      x: Math.round((monitor.width - width) / 2), y: this._panelTop(monitor.height), ...verticalBoxParams() } as any);
     // Keys on the pinned page, where the panel has the focus.
     panel.connect('key-press-event', (_actor: Clutter.Actor, event: Clutter.Event) => this._onPinnedKey(event));
     // A click outside the field closes it. Presses inside must not be stopped: from GNOME 49 a button clicks
@@ -212,11 +223,15 @@ export class Launcher {
       primary_icon: new St.Icon({ icon_name: 'edit-find-symbolic', style_class: 'lg-launcher-entry-icon' }) });
     // The hint takes the panel's colour too, dimmed the way the theme dims it.
     entry.hint_actor!.opacity = HINT_OPACITY;
-    // Hidden while empty, so the panel's spacing does not add room below the field.
-    const list = new St.BoxLayout({ style_class: 'lg-launcher-list', visible: false, ...verticalBoxParams() } as any);
+    const list = new St.BoxLayout({ style_class: 'lg-launcher-list', x_expand: true, ...verticalBoxParams() } as any);
+    // Hidden while empty, so the panel's spacing does not add room below the field. Its height is limited in
+    // _limitResults(), as St.BoxLayout ignores max-height.
+    const resultsBox = new St.ScrollView({ style_class: 'lg-launcher-results', x_expand: true, visible: false,
+      hscrollbar_policy: St.PolicyType.NEVER, vscrollbar_policy: St.PolicyType.AUTOMATIC, overlay_scrollbars: true });
+    resultsBox.set_child(list);
     const searchBox = new St.BoxLayout({ style_class: 'lg-launcher-page', x_expand: true, ...verticalBoxParams() } as any);
     searchBox.add_child(entry);
-    searchBox.add_child(list);
+    searchBox.add_child(resultsBox);
     const pinnedBox = new St.ScrollView({ style_class: 'lg-launcher-pinned', x_expand: true, visible: false,
       hscrollbar_policy: St.PolicyType.NEVER, vscrollbar_policy: St.PolicyType.AUTOMATIC, overlay_scrollbars: true,
       // On the scroll view, as St.BoxLayout ignores min-height; inside the panel's padding.
@@ -230,6 +245,7 @@ export class Launcher {
     this._panel = panel;
     this._entry = entry;
     this._list = list;
+    this._resultsBox = resultsBox;
     this._searchBox = searchBox;
     this._pinnedBox = pinnedBox;
     this._view = 'search';
@@ -243,7 +259,8 @@ export class Launcher {
     this._applyMaterial();
     this._materialIds = (['tint-color', 'tint-strength', 'blur-radius', 'corner-radius', 'brightness', 'contrast',
       'saturation']).map(key => this._settings.connect(`changed::launcher-${key}`, () => this._applyMaterial()));
-    for (const key of ['width', 'pinned-height'])
+    this._limitResults();
+    for (const key of ['width', 'pinned-height', 'pinned-icon-size'])
       this._materialIds.push(this._settings.connect(`changed::launcher-${key}`, () => this._applySize()));
 
     entry.clutter_text.connect('text-changed', () => this._queueSearch());
@@ -285,6 +302,7 @@ export class Launcher {
     this._panel = null;
     this._entry = null;
     this._list = null;
+    this._resultsBox = null;
     this._searchBox = null;
     this._pinnedBox = null;
     this._lens = null;
@@ -339,6 +357,19 @@ export class Launcher {
     const max = Math.round(monitorHeight * PINNED_MAX_HEIGHT);
     const min = Math.min(this._settings.get_int('launcher-pinned-height') - PANEL_PADDING * 2, max);
     return `min-height: ${min}px; max-height: ${max}px;`;
+  }
+
+  // The field sits at TOP of the screen's height, and higher on a screen too short to leave MIN_RESULTS_HEIGHT below it.
+  private _panelTop(monitorHeight: number): number {
+    const lowest = monitorHeight - SIDE_MARGIN - PANEL_PADDING * 2 - PAGE_SPACING - ENTRY_HEIGHT - MIN_RESULTS_HEIGHT;
+    return Math.max(SIDE_MARGIN, Math.min(Math.round(monitorHeight * TOP), lowest));
+  }
+
+  // The results scroll past what is left of the screen below the field, so that they never run off it.
+  private _limitResults(): void {
+    const panel = this._panel!;
+    const room = this._root!.height - panel.y - SIDE_MARGIN - PANEL_PADDING * 2 - PAGE_SPACING - this._entry!.get_preferred_height(-1)[1];
+    this._resultsBox!.set_style(`max-height: ${Math.max(Math.floor(room), 0)}px;`);
   }
 
   private _applySize(): void {
@@ -514,12 +545,12 @@ export class Launcher {
       this._items[this._selected]?.activate();
       return Clutter.EVENT_STOP;
     }
-    const n = this._items.length, tiles = this._tileCount, i = this._selected;
+    const n = this._items.length, tiles = this._tileCount, cols = this._columns, i = this._selected;
     let next = i;
     if (key === Clutter.KEY_Right) next = Math.min(i + 1, n - 1);
     else if (key === Clutter.KEY_Left) next = Math.max(i - 1, 0);
-    else if (key === Clutter.KEY_Down) next = i < tiles ? (i + GRID_COLUMNS < tiles ? i + GRID_COLUMNS : Math.min(tiles, n - 1)) : Math.min(i + 1, n - 1);
-    else if (key === Clutter.KEY_Up) next = i < tiles ? (i >= GRID_COLUMNS ? i - GRID_COLUMNS : i) : i === tiles ? Math.max(tiles - 1, 0) : i - 1;
+    else if (key === Clutter.KEY_Down) next = i < tiles ? (i + cols < tiles ? i + cols : Math.min(tiles, n - 1)) : Math.min(i + 1, n - 1);
+    else if (key === Clutter.KEY_Up) next = i < tiles ? (i >= cols ? i - cols : i) : i === tiles ? Math.max(tiles - 1, 0) : i - 1;
     else {
       // Typing goes back to the search, with what was typed in the field.
       const text = event.get_key_unicode() as unknown as string;
@@ -532,17 +563,18 @@ export class Launcher {
     return Clutter.EVENT_STOP;
   }
 
-  private _select(index: number): void {
+  // Scrolls to the item only when the keys moved to it; with the pointer, the rows would move under it.
+  private _select(index: number, reveal = true): void {
     this._items[this._selected]?.actor.remove_style_pseudo_class('selected');
     this._selected = index;
     const item = this._items[index];
     if (!item) return;
     item.actor.add_style_pseudo_class('selected');
-    if (this._view === 'pinned') this._scrollTo(item.actor);
+    if (reveal) this._scrollTo(item.actor);
   }
 
   private _scrollTo(actor: Clutter.Actor): void {
-    const view = this._pinnedBox!;
+    const view = this._view === 'pinned' ? this._pinnedBox! : this._resultsBox!;
     const page = view.get_child() as unknown as Clutter.Actor;
     const adjustment = view.get_vadjustment();
     // Both are moved by the scrolling alike, so their difference is the actor's place on the page.
@@ -631,7 +663,9 @@ export class Launcher {
     const terms = this._terms;
     let metas: any[] = [];
     try {
-      const ids: string[] = await provider.getInitialResultSet(terms, cancellable);
+      let ids: string[] = await provider.getInitialResultSet(terms, cancellable);
+      // GNOME Software also finds what is installed, which the applications' own results already show.
+      if (provider.id === SOFTWARE_PROVIDER) ids = ids.filter(id => !this._isInstalled(id));
       // Pinned results go first, so that the cut to PER_PROVIDER keeps them.
       const pinned = this._pins.idsOf(provider.id);
       const ordered = pinned.size ? [...ids.filter(id => pinned.has(id)), ...ids.filter(id => !pinned.has(id))] : ids;
@@ -642,9 +676,15 @@ export class Launcher {
       if (!isCancelled(e)) this._logger.log(`[Liquid Glass] Search provider failed: ${e}`);
     }
     if (cancellable.is_cancelled()) return;
-    this._found.push(...metas.map(meta => ({ provider, order, meta })));
+    const software = provider.id === SOFTWARE_PROVIDER;
+    this._found.push(...metas.map(meta => ({ provider, order, meta, install: software && softwareDesktopId(meta.id) !== null })));
     this._waiting--;
     if (this._waiting === 0 || !this._settleId) this._commit();
+  }
+
+  private _isInstalled(softwareId: string): boolean {
+    const desktopId = softwareDesktopId(softwareId);
+    return !!desktopId && !!Shell.AppSystem.get_default().lookup_app(desktopId);
   }
 
   // The calculation, first of all results, with the value as its name.
@@ -678,14 +718,15 @@ export class Launcher {
       const icon = this._resultIcon(result, ICON_SIZE);
       const activate = () => this._activateResult(result);
       const row = this._row(icon, result.meta.name ?? '', result.meta.description || result.provider?.appInfo?.get_name() || '',
-        this._pinOf(result, icon), activate, () => {});
-      row.connect('notify::hover', () => { if (row.hover) this._select(i); });
+        this._pinOf(result, icon), activate, () => {}, result.install ? 'Install' : '');
+      row.connect('notify::hover', () => { if (row.hover) this._select(i, false); });
       list.add_child(row);
       return { actor: row, activate };
     });
-    list.visible = this._items.length > 0;
+    this._resultsBox!.visible = this._items.length > 0;
+    this._resultsBox!.get_vadjustment().value = 0;
     this._tileCount = 0;
-    this._select(Math.min(this._selected, Math.max(this._items.length - 1, 0)));
+    this._select(Math.min(this._selected, Math.max(this._items.length - 1, 0)), false);
     this._text.invalidate();
     this._colorText();
   }
@@ -738,7 +779,7 @@ export class Launcher {
   }
 
   private _row(icon: Clutter.Actor | null, title: string, detail: string, pin: Pin | null, activate: () => void,
-    onPinChange: () => void): St.Button {
+    onPinChange: () => void, badge = ''): St.Button {
     const row = new St.Button({ style_class: 'lg-launcher-result', can_focus: false, x_expand: true });
     const box = new St.BoxLayout({ style_class: 'lg-launcher-result-box', x_expand: true });
     // The pin's room is kept on every row, so that the icons line up.
@@ -759,6 +800,7 @@ export class Launcher {
     }
     if (icon) box.add_child(icon);
     box.add_child(text);
+    if (badge) box.add_child(new St.Label({ text: badge, style_class: 'lg-launcher-badge', y_align: Clutter.ActorAlign.CENTER }));
     row.set_child(box);
     return row;
   }
@@ -809,18 +851,21 @@ export class Launcher {
     };
     if (apps.length) {
       page.add_child(new St.Label({ text: 'Applications', style_class: 'lg-launcher-section' }));
-      const tile = Math.floor((this._panelWidth(true, this._root!.width) - PANEL_PADDING * 2 - GRID_SPACING * (GRID_COLUMNS - 1)) / GRID_COLUMNS);
+      const iconSize = this._settings.get_int('launcher-pinned-icon-size');
+      const { columns, tile } = pinnedGrid(this._panelWidth(true, this._root!.width) - PANEL_PADDING * 2, iconSize, GRID_SPACING,
+        TILE_SIDE_ROOM);
+      this._columns = columns;
       let line: St.BoxLayout | null = null;
       apps.forEach((pin, i) => {
-        if (i % GRID_COLUMNS === 0) {
+        if (i % columns === 0) {
           line = new St.BoxLayout({ style_class: 'lg-launcher-grid-row' });
           page.add_child(line);
         }
         const app = pin.id.endsWith('.desktop') ? Shell.AppSystem.get_default().lookup_app(pin.id) : null;
-        const button = new St.Button({ style_class: 'lg-launcher-tile', can_focus: false, width: tile, height: tile });
+        const button = new St.Button({ style_class: 'lg-launcher-tile', can_focus: false, width: tile });
         const content = new St.BoxLayout({ style_class: 'lg-launcher-tile-box', x_align: Clutter.ActorAlign.CENTER,
           y_align: Clutter.ActorAlign.CENTER, x_expand: true, y_expand: true, ...verticalBoxParams() } as any);
-        const icon = this._pinIcon(pin, TILE_ICON_SIZE);
+        const icon = this._pinIcon(pin, iconSize);
         icon.x_align = Clutter.ActorAlign.CENTER;
         content.add_child(icon);
         const name = new St.Label({ text: app?.get_name() ?? pin.name, style_class: 'lg-launcher-tile-name',
@@ -834,7 +879,7 @@ export class Launcher {
         stack.add_child(toggle);
         button.set_child(stack);
         const index = this._items.length;
-        button.connect('notify::hover', () => { if (button.hover) this._select(index); });
+        button.connect('notify::hover', () => { if (button.hover) this._select(index, false); });
         line!.add_child(button);
         this._items.push({ actor: button, activate: () => this._activatePin(pin) });
       });
@@ -848,7 +893,7 @@ export class Launcher {
         const row = this._row(this._pinIcon(pin, ICON_SIZE), pin.name,
           pin.description || provider?.appInfo?.get_name() || '', pin, () => this._activatePin(pin), refresh);
         const index = this._items.length;
-        row.connect('notify::hover', () => { if (row.hover) this._select(index); });
+        row.connect('notify::hover', () => { if (row.hover) this._select(index, false); });
         list.add_child(row);
         this._items.push({ actor: row, activate: () => this._activatePin(pin) });
       }
