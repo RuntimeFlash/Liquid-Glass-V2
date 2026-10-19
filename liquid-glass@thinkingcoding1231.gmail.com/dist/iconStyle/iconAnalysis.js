@@ -833,8 +833,10 @@ export function analyzeIcon(icon) {
             // Grain breaks a plate into specks; then the fit starts from all of it.
             const share = own.length ? most / own.length : 0;
             const fit = fitColor(c.shape, share >= MIN_SURFACE ? own.filter(i => labels[i] === main) : own, lab, w);
-            const plate = { shape: c.shape, color: fit.color, plain: false, parent: parents[k], surface: 0, error: fit.rms,
-                share, noise: fit.noise, pieces: piecesOf(own, counts, most, labels, lab) };
+            const plate = {
+                shape: c.shape, color: fit.color, plain: false, parent: parents[k], surface: 0, error: fit.rms,
+                share, noise: fit.noise, pieces: piecesOf(own, counts, most, labels, lab)
+            };
             let surface = 0;
             const at = [0, 0, 0];
             const near = Math.max(SYMBOL_LOW, fit.noise * 3);
@@ -1555,8 +1557,10 @@ function regionsOf(lab, opaque, owner, depth, w, h, s) {
         if (j === undefined) {
             j = list.length;
             keys.set(key, j);
-            list.push({ owner: owner[i], count: 0, interior: 0, color: [0, 0, 0], band: 0, ground: false, strength: 0, contrast: 0,
-                decided: false, fades: false, edge: false });
+            list.push({
+                owner: owner[i], count: 0, interior: 0, color: [0, 0, 0], band: 0, ground: false, strength: 0, contrast: 0,
+                decided: false, fades: false, edge: false
+            });
         }
         region[i] = j;
     }
@@ -1672,8 +1676,10 @@ function symbolTone(parts, edges) {
     const pairs = [...meet].map(([key, length]) => {
         const p = Math.floor(key / TONE_GROUPS), q = key % TONE_GROUPS;
         const apart = distance(kept[p].color, kept[q].color);
-        return { p, q, weight: Math.sqrt(length), want: TONE_SEEN * Math.min(apart / TONE_FULL, 1),
-            lighter: Math.sign(kept[p].color[0] - kept[q].color[0]) };
+        return {
+            p, q, weight: Math.sqrt(length), want: TONE_SEEN * Math.min(apart / TONE_FULL, 1),
+            lighter: Math.sign(kept[p].color[0] - kept[q].color[0])
+        };
     });
     if (!pairs.length)
         return null;

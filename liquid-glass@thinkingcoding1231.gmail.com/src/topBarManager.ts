@@ -1,4 +1,5 @@
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
@@ -17,9 +18,9 @@ import type { Logger } from './logger.js';
 
 export type TopBarStyle = 'off' | 'pill' | 'islands';
 
-// Room around the glass rect for the shader's edge effects.
+// Extra space for shader edge effects.
 const SHADER_PADDING = 20;
-// Room below the bar for the single pill's shadow.
+// Space for the pill shadow.
 const SHADOW_ROOM = 48;
 const SIDES = ['top', 'bottom', 'left', 'right'] as const;
 type Insets = Record<typeof SIDES[number], number>;
@@ -28,11 +29,7 @@ function sanitizeStyle(value: string): TopBarStyle {
   return value === 'pill' || value === 'islands' ? value : 'off';
 }
 
-/**
- * Glass for the top bar itself: one pill across it, or an island behind each
- * of its three groups of buttons (activities, clock, status). The bar's own
- * background is cleared while either is on.
- */
+/** Glass behind the top bar: one pill or separate islands for its three button groups. */
 export class TopBarManager {
   private _style: TopBarStyle = 'off';
   private _glass: BackdropGlass | null = null;
@@ -40,16 +37,24 @@ export class TopBarManager {
   private _frameSyncId = 0;
   private _frameSignalId = 0;
   private _lastKey = '';
+  private _lastIslandRects: number[][] = [];
+  private _islandGeometryHoldFrames = 0;
   private _text: AdaptiveTextColor;
-  // The bar and its boxes, with the inline styles they had before ours.
+  // Original styles for the panel and its boxes.
   private _savedStyles: [St.Widget, string | null][] = [];
+  private _childrenStyles: [St.Widget, string | null][] = [];
   private _panelStyleId = 0;
-  // Writing the bar's inline style re-emits style-changed; the handler must not
-  // run _applyLayout() from inside its own write, or the two can feed each other.
-  private _applyingLayout = false;
+  // Deferred so a style-changed emitted by our own write lands after the write,
+  // and coalesced so a burst of theme changes becomes one pass.
   private _layoutIdleId = 0;
   private _margin: Insets = { top: 0, bottom: 0, left: 0, right: 0 };
   private _padding: Insets = { top: 0, bottom: 0, left: 0, right: 0 };
+  private _boxSignalIds: [St.Widget, number][] = [];
+  private _containerSignalIds: [St.Widget, number][] = [];
+  private _containerTargets: [St.Widget, St.Widget][] = [];
+  private _forwardedPresses = new Map<St.Widget, { touch: boolean, native: boolean }>();
+  private _stagePointerSignalId = 0;
+  private _applyingLayout = false;
 
   constructor(private _path: string, private _settings: Gio.Settings, private _logger: Logger) {
     this._text = new AdaptiveTextColor(() => this._textRoots(), () => (this._glass ? [this._glass] : []),
@@ -92,21 +97,27 @@ export class TopBarManager {
       extensionPath: this._path, settings: this._settings, logger: this._logger, owner: 'top-bar',
     } as any);
     this._glass = glass;
+    glass.reactive = false;
     glass.setPadding(SHADER_PADDING);
     glass.setIsDock(false);
     glass.setMultiRegionMode(this._style === 'islands');
     glass.setShadowMaxRadius(SHADOW_ROOM - 8);
-    // Below the bar, so the glass reads the stage before the bar is drawn.
+    // Draw the glass below the panel.
     Main.layoutManager.uiGroup.insert_child_below(glass, panelBox);
     this._applyMaterial();
     this._lastKey = '';
+    this._lastIslandRects = [];
+    this._islandGeometryHoldFrames = 0;
     this._savedStyles = [panel, panel._leftBox, panel._centerBox, panel._rightBox].map(actor => [actor, actor.get_style()]);
-    // The theme can change the bar's height under us.
+    this._childrenStyles = [];
+    // Reapply layout when the theme changes the bar height.
     this._panelStyleId = panel.connect('style-changed', () => this._scheduleLayout());
     this._applyLayout();
+    this._connectBoxSignals();
+    this._stagePointerSignalId = global.stage.connect('captured-event', (_actor, event: Clutter.Event) => this._onStageEvent(event));
 
     startSyncLoop(this._frameSignalSlot, this._frameSlot, {
-      // At shell shutdown the stage destroys the glass before we are told.
+      // The glass may be destroyed before shutdown cleanup runs.
       alive: () => !!this._glass && isActorValid(this._glass),
       honourFreeze: true,
       errorTag: 'TopBarManager',
@@ -115,7 +126,46 @@ export class TopBarManager {
         this._sync();
       },
     });
+    ensureGlassAllocated(this._glass);
+    this._sync();
     this._syncText();
+  }
+
+  private _connectBoxSignals(): void {
+    const panel = Main.panel as any;
+    for (const box of [panel._leftBox, panel._centerBox, panel._rightBox]) {
+      const addedId = box.connect('child-added', () => this._applyLayout());
+      // A removed button may be re-added elsewhere, so it gets its own styles back.
+      const removedId = box.connect('child-removed', (_box: St.Widget, child: Clutter.Actor) => this._releaseChild(child));
+      this._boxSignalIds.push([box, addedId], [box, removedId]);
+    }
+  }
+
+  private _releaseChild(child: Clutter.Actor): void {
+    const target = this._containerTargets.find(([container]) => container === child)?.[1];
+    for (const [actor, style] of this._childrenStyles) {
+      if (actor === child || actor === target) actor.set_style(style);
+    }
+    this._childrenStyles = this._childrenStyles.filter(([actor]) => actor !== child && actor !== target);
+    if (!target) return;
+    for (const [actor, id] of this._containerSignalIds) {
+      if (actor === child || actor === target) actor.disconnect(id);
+    }
+    this._containerSignalIds = this._containerSignalIds.filter(([actor]) => actor !== child && actor !== target);
+    this._containerTargets = this._containerTargets.filter(([container]) => container !== child);
+    this._forwardedPresses.delete(child as St.Widget);
+    child.reactive = false;
+    target.remove_style_pseudo_class('hover');
+    target.remove_style_pseudo_class('active');
+  }
+
+  private _disconnectBoxSignals(): void {
+    for (const [box, id] of this._boxSignalIds) {
+      if (isActorValid(box)) {
+        box.disconnect(id);
+      }
+    }
+    this._boxSignalIds = [];
   }
 
   private _applyMaterial(): void {
@@ -134,45 +184,204 @@ export class TopBarManager {
     return Object.fromEntries(SIDES.map(side => [side, this._settings.get_int(this._key(`${kind}-${side}`))])) as Insets;
   }
 
-  // The bar grows by the margin and padding so the buttons keep the theme's
-  // height, and its boxes are padded to put the buttons inside the pills.
+  // Buttons made without a menu carry a dummy one and act on their own handlers.
+  private _targetMenu(target: St.Widget): PopupMenu.PopupMenuBase | null {
+    const anyTarget = target as any;
+    const menu = anyTarget.menu ?? anyTarget._delegate?.menu;
+    return menu instanceof PopupMenu.PopupMenuBase ? menu : null;
+  }
+
+  private _eventComesFromTarget(target: St.Widget, event: Clutter.Event): boolean {
+    let source: Clutter.Actor | null = event.get_source();
+    while (source) {
+      if (source === target) return true;
+      source = source.get_parent();
+    }
+    return false;
+  }
+
+  // A bounds test rather than a pick: this runs every frame and a pick walks the whole stage.
+  private _pointerIsOverContainer(container: St.Widget): boolean {
+    if (!container.mapped) return false;
+    const [px, py] = global.get_pointer();
+    const [x, y] = container.get_transformed_position();
+    const [w, h] = container.get_transformed_size();
+    return px >= x && px < x + w && py >= y && py < y + h;
+  }
+
+  private _syncForwardedHover(): void {
+    for (const [container, target] of this._containerTargets) {
+      if (!isActorValid(container) || !isActorValid(target)) continue;
+      if (this._pointerIsOverContainer(container)) {
+        target.add_style_pseudo_class('hover');
+      } else {
+        // Overlays can suppress leave-event, so the state is also cleared here.
+        target.remove_style_pseudo_class('hover');
+        target.remove_style_pseudo_class('active');
+        this._forwardedPresses.delete(container);
+      }
+    }
+  }
+
+  private _isPress(event: Clutter.Event): boolean {
+    const type = event.type();
+    if (type === Clutter.EventType.TOUCH_BEGIN) return true;
+    return type === Clutter.EventType.BUTTON_PRESS && event.get_button() === Clutter.BUTTON_PRIMARY;
+  }
+
+  private _toggleOverview(): void {
+    if (Main.overview.shouldToggleByCornerOrButton()) Main.overview.toggle();
+  }
+
+  // A press on the wrapper above or below the button. Menus open on press, as the panel's own
+  // buttons do, so their release needs no handling; Activities and plain buttons act on release.
+  private _onWrapperPress(container: St.Widget, target: St.Widget, event: Clutter.Event): boolean {
+    const touch = event.type() === Clutter.EventType.TOUCH_BEGIN;
+    if (target.get_name() !== 'panelActivities') {
+      const menu = this._targetMenu(target);
+      const wasOpen = menu?.isOpen;
+      const handled = target.emit(touch ? 'touch-event' : 'button-press-event', event.copy()) as unknown as boolean;
+      if (menu) {
+        // AppIndicator buttons toggle their menu in the press handler, at once or after the
+        // double-click wait, and still propagate; a second toggle here closes it mid-animation.
+        const selfToggled = menu.isOpen !== wasOpen
+          || Boolean((target as St.Widget & { _waitDoubleClickPromise?: unknown })._waitDoubleClickPromise);
+        if (handled !== Clutter.EVENT_STOP && !selfToggled) menu.toggle();
+        return Clutter.EVENT_STOP;
+      }
+    }
+    target.add_style_pseudo_class('active');
+    this._forwardedPresses.set(container, { touch, native: false });
+    return Clutter.EVENT_STOP;
+  }
+
+  // The stage sees every release first, also one that ends outside the wrapper.
+  private _onStageEvent(event: Clutter.Event): boolean {
+    const type = event.type();
+    if (this._isPress(event)) {
+      // Layout changes can move the picked actor between press and release.
+      for (const [container, target] of this._containerTargets) {
+        if (!this._eventComesFromTarget(target, event)) continue;
+        if (!this._targetMenu(target))
+          this._forwardedPresses.set(container, { touch: type === Clutter.EventType.TOUCH_BEGIN, native: true });
+        break;
+      }
+      return Clutter.EVENT_PROPAGATE;
+    }
+
+    const touchEnd = type === Clutter.EventType.TOUCH_END;
+    if (!touchEnd && (type !== Clutter.EventType.BUTTON_RELEASE || event.get_button() !== Clutter.BUTTON_PRIMARY))
+      return Clutter.EVENT_PROPAGATE;
+
+    for (const [container, press] of this._forwardedPresses) {
+      if (press.touch !== touchEnd) continue;
+      this._forwardedPresses.delete(container);
+      const target = this._containerTargets.find(([candidate]) => candidate === container)?.[1];
+      if (!target || !isActorValid(target)) return Clutter.EVENT_STOP;
+      target.remove_style_pseudo_class('active');
+
+      if (press.native && this._eventComesFromTarget(target, event)) return Clutter.EVENT_PROPAGATE;
+      if (!this._pointerIsOverContainer(container)) return Clutter.EVENT_PROPAGATE;
+
+      if (target.get_name() === 'panelActivities')
+        this._toggleOverview();
+      else if (target instanceof St.Button)
+        target.emit('clicked', Clutter.BUTTON_PRIMARY);
+      else
+        target.emit(touchEnd ? 'touch-event' : 'button-release-event', event.copy());
+      return Clutter.EVENT_STOP;
+    }
+    return Clutter.EVENT_PROPAGATE;
+  }
+
+  private _setupContainerForwarding(container: St.Widget, target: St.Widget): void {
+    if (this._containerTargets.some(([actor]) => actor === container)) return;
+
+    const clearHover = () => {
+      if (!this._pointerIsOverContainer(container)) {
+        target.remove_style_pseudo_class('hover');
+        target.remove_style_pseudo_class('active');
+      }
+      return Clutter.EVENT_PROPAGATE;
+    };
+    const enterId = container.connect('enter-event', () => {
+      target.add_style_pseudo_class('hover');
+      return Clutter.EVENT_PROPAGATE;
+    });
+    const leaveId = container.connect('leave-event', clearHover);
+    const targetLeaveId = target.connect('leave-event', clearHover);
+    // Presses that reach the button itself keep their normal path.
+    const pressId = container.connect('captured-event', (_actor, event: Clutter.Event) => {
+      if (!this._isPress(event) || this._eventComesFromTarget(target, event)) return Clutter.EVENT_PROPAGATE;
+      return this._onWrapperPress(container, target, event);
+    });
+
+    this._containerTargets.push([container, target]);
+    this._containerSignalIds.push([container, enterId], [container, leaveId], [target, targetLeaveId], [container, pressId]);
+  }
+
+  private _disconnectContainerSignals(): void {
+    // The panel's wrappers are not reactive on their own.
+    for (const [container] of this._containerTargets) {
+      if (isActorValid(container)) container.reactive = false;
+    }
+    for (const [actor, id] of this._containerSignalIds) {
+      if (isActorValid(actor)) actor.disconnect(id);
+    }
+    this._containerSignalIds = [];
+    this._containerTargets = [];
+    this._forwardedPresses.clear();
+    if (this._stagePointerSignalId) global.stage.disconnect(this._stagePointerSignalId);
+    this._stagePointerSignalId = 0;
+  }
+
+  // The bar grows by the margin and padding while each button keeps the theme's height. The
+  // wrappers around the buttons fill the whole bar, so a press at the screen edge still lands.
   private _applyLayout(): void {
+    // set_style() below emits style-changed on the panel, which calls back in here.
     if (!this._glass || this._applyingLayout) return;
     this._applyingLayout = true;
     try {
-      this._writeLayout();
+      const panel = Main.panel as any;
+      const margin = this._margin = this._insets('margin');
+      const padding = this._padding = this._insets('padding');
+      const top = margin.top + padding.top;
+      const bottom = margin.bottom + padding.bottom;
+      const own = (style: string | null) => style?.trim().replace(/;$/, '') || '';
+      const withOwn = (style: string | null, extra: string) => (own(style) ? `${own(style)}; ${extra}` : extra);
+
+      this._childrenStyles = this._childrenStyles.filter(([actor]) => isActorValid(actor));
+      // Measure the theme's height with all of our styles removed.
+      for (const [actor, original] of [...this._savedStyles, ...this._childrenStyles]) actor.set_style(own(original));
+      const themeHeight = panel.get_theme_node().get_height();
+      const baseHeight = themeHeight > 0 ? themeHeight : panel.get_preferred_height(-1)[1];
+      const totalHeight = baseHeight + top + bottom;
+
+      for (const [actor, original] of this._savedStyles) {
+        if (actor === panel) {
+          actor.set_style(withOwn(original, `height: ${totalHeight}px; min-height: ${totalHeight}px; padding-top: 0px; padding-bottom: 0px;`));
+          continue;
+        }
+        const leftInset = actor === panel._leftBox ? margin.left + padding.left : 0;
+        const rightInset = actor === panel._rightBox ? margin.right + padding.right : 0;
+        actor.set_style(withOwn(original, `height: ${totalHeight}px; padding: 0px ${rightInset}px 0px ${leftInset}px;`));
+
+        for (const child of actor.get_children()) {
+          if (!(child instanceof St.Widget)) continue;
+          const target = this._findPanelButton(child) ?? child;
+          if (target !== child) {
+            child.reactive = true;
+            this._setChildStyle(child, `height: ${totalHeight}px;`);
+            this._setupContainerForwarding(child, target);
+          }
+          this._setChildStyle(target, `height: ${baseHeight}px; margin-top: ${top}px; margin-bottom: ${bottom}px;`);
+        }
+      }
     } finally {
       this._applyingLayout = false;
     }
   }
 
-  private _writeLayout(): void {
-    const panel = Main.panel as any;
-    const margin = this._margin = this._insets('margin');
-    const padding = this._padding = this._insets('padding');
-    const top = margin.top + padding.top, bottom = margin.bottom + padding.bottom;
-    const rtl = panel.get_text_direction() === Clutter.TextDirection.RTL;
-    const [first, last] = rtl ? [panel._rightBox, panel._leftBox] : [panel._leftBox, panel._rightBox];
-    const islands = this._style === 'islands';
-    for (const [actor, original] of this._savedStyles) {
-      let style;
-      if (actor === panel) {
-        // A theme height caps the bar's natural height before St adds the padding;
-        // without one, the padded boxes already make the bar tall enough.
-        if (panel.get_theme_node().get_height() < 0) continue;
-        style = `padding-top: ${top}px; padding-bottom: ${bottom}px;`;
-      } else {
-        const left = actor === first ? margin.left + padding.left : islands ? padding.left : 0;
-        const right = actor === last ? margin.right + padding.right : islands ? padding.right : 0;
-        style = `padding: ${top}px ${right}px ${bottom}px ${left}px;`;
-      }
-      const own = original?.trim().replace(/;$/, '');
-      actor.set_style(own ? `${own}; ${style}` : style);
-    }
-  }
-
-  // Deferred so a style-changed emitted by our own write lands after the write,
-  // and coalesced so a burst of theme changes becomes one pass.
   private _scheduleLayout(): void {
     if (this._layoutIdleId) return;
     this._layoutIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
@@ -180,6 +389,26 @@ export class TopBarManager {
       this._applyLayout();
       return GLib.SOURCE_REMOVE;
     });
+  }
+
+  private _findPanelButton(root: St.Widget): St.Widget | null {
+    const queue: Clutter.Actor[] = [root];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (current instanceof St.Widget && current.has_style_class_name('panel-button')) return current;
+      queue.push(...current.get_children());
+    }
+    return null;
+  }
+
+  private _setChildStyle(actor: St.Widget, extra: string): void {
+    let entry = this._childrenStyles.find(([a]) => a === actor);
+    if (!entry) {
+      entry = [actor, actor.get_style()];
+      this._childrenStyles.push(entry);
+    }
+    const own = entry[1]?.trim().replace(/;$/, '');
+    actor.set_style(own ? `${own}; ${extra}` : extra);
   }
 
   private _syncText(): void {
@@ -196,7 +425,7 @@ export class TopBarManager {
     return [panel._leftBox, panel._centerBox, panel._rightBox].filter(box => box && box.mapped);
   }
 
-  // The visible buttons of one of the bar's boxes, [x0, x1] in bar coordinates.
+  // Visible child extent in bar coordinates.
   private _boxExtent(box: Clutter.Actor): number[] | null {
     let x0 = Infinity, x1 = -Infinity;
     const [bx] = box.get_position();
@@ -210,8 +439,10 @@ export class TopBarManager {
     return x1 > x0 ? [x0, x1] : null;
   }
 
-  // Every frame: places the glass under the bar, or hides it with the bar.
+  // Sync the glass beneath the panel, hiding it with the bar.
   private _sync(): void {
+    // Modal overlays may suppress leave-event; reconcile hover each frame.
+    this._syncForwardedHover();
     const glass = this._glass!;
     const panelBox = Main.layoutManager.panelBox;
     const panel = Main.panel as any;
@@ -232,8 +463,15 @@ export class TopBarManager {
     const pillHeight = height - top - bottom;
     const left = this._margin.left, right = width - this._margin.right;
     const rects: number[][] = [];
+    const textAnimating = this._style === 'islands' && this._text.isAnimating();
+    if (textAnimating) this._islandGeometryHoldFrames = 4;
+    else if (this._islandGeometryHoldFrames > 0) this._islandGeometryHoldFrames--;
+    const holdIslandGeometry = textAnimating || this._islandGeometryHoldFrames > 0;
     if (this._style === 'pill') {
       rects.push([left, top, right - left, pillHeight]);
+    } else if (holdIslandGeometry && this._lastIslandRects.length > 0) {
+      // Text tweens can briefly disturb allocations; hold island geometry steady until they settle.
+      rects.push(...this._lastIslandRects.map(rect => [...rect]));
     } else {
       for (const box of [panel._leftBox, panel._centerBox, panel._rightBox]) {
         const extent = this._boxExtent(box);
@@ -242,6 +480,11 @@ export class TopBarManager {
         const x1 = Math.min(extent[1] + this._padding.right, right);
         if (x1 > x0) rects.push([x0, top, x1 - x0, pillHeight]);
       }
+    }
+    if (this._style === 'islands' && !holdIslandGeometry) {
+      this._lastIslandRects = rects.map(rect => [...rect]);
+    } else if (this._style === 'islands' && this._lastIslandRects.length === 0 && rects.length > 0) {
+      this._lastIslandRects = rects.map(rect => [...rect]);
     }
 
     const key = `${x},${y},${width},${height},${rects.flat().join(',')}`;
@@ -271,9 +514,10 @@ export class TopBarManager {
     this._text.clear();
     const glass = this._glass;
     this._glass = null;
+    this._disconnectBoxSignals();
+    this._disconnectContainerSignals();
     if (glass) {
       glass.cleanup();
-      // At shell shutdown the stage may have destroyed it already.
       if (isActorValid(glass)) glass.destroy();
       (Main.panel as any).remove_style_class_name('liquid-glass-transparent');
     }
@@ -285,7 +529,12 @@ export class TopBarManager {
     }
     for (const [actor, style] of this._savedStyles)
       if (isActorValid(actor)) actor.set_style(style);
+    for (const [actor, style] of this._childrenStyles)
+      if (isActorValid(actor)) actor.set_style(style);
     this._savedStyles = [];
+    this._childrenStyles = [];
+    this._lastIslandRects = [];
+    this._islandGeometryHoldFrames = 0;
     this._style = 'off';
   }
 

@@ -2,8 +2,10 @@ import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import St from 'gi://St';
 
-import { StageContrastSampler, AdaptiveContrastConfig, type AdaptiveColorPreference,
-  type BackdropSource, type SampleRect } from './contrastSampler.js';
+import {
+  StageContrastSampler, AdaptiveContrastConfig, type AdaptiveColorPreference,
+  type BackdropSource, type SampleRect
+} from './contrastSampler.js';
 import { adaptiveColorTweener, hexToRgb, resolveCrossFade } from './animation/colors.js';
 import { isActorValid } from './actors/lifecycle.js';
 import type { Logger } from './logger.js';
@@ -40,7 +42,7 @@ export class AdaptiveTextColor {
   private _styled = new Map<St.Widget, { style: string, destroyId: number, color: string }>();
 
   constructor(private _roots: () => Clutter.Actor[], private _glasses: () => BackdropSource[],
-    private _logger: Logger, private _label: string, private _options: AdaptiveTextOptions = {}) {}
+    private _logger: Logger, private _label: string, private _options: AdaptiveTextOptions = {}) { }
 
   /**
    * @param preferredMinContrast When above 0, `preference` is kept while it
@@ -70,6 +72,15 @@ export class AdaptiveTextColor {
   // Measures again at the next update, for a surface whose content changed.
   invalidate(): void {
     this._sampler.invalidate();
+  }
+
+  // True while any of this surface's text actors are being recoloured. Layouts
+  // that derive geometry from those actors can hold their last stable bounds.
+  isAnimating(): boolean {
+    for (const actor of this._styled.keys()) {
+      if (adaptiveColorTweener.isAnimating(actor)) return true;
+    }
+    return false;
   }
 
   update(): void {

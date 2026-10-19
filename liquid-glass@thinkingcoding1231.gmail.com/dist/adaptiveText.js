@@ -66,6 +66,16 @@ export class AdaptiveTextColor {
         this._sampler.invalidate();
     }
 
+    // True while any of this surface's text actors are being recoloured. Layouts
+    // that derive geometry from those actors can hold their last stable bounds.
+    isAnimating() {
+        for (const actor of this._styled.keys()) {
+            if (adaptiveColorTweener.isAnimating(actor))
+                return true;
+        }
+        return false;
+    }
+
     update() {
         if (this._inFlight || this._pending > 0 || this._options.held?.())
             return;
