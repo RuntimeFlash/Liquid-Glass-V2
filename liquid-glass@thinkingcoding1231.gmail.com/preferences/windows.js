@@ -152,8 +152,12 @@ export class WindowRules {
     this.controls.toggle(group, 'Window glass', 'enable-application-glass');
     const allRow = this.controls.toggle(group, 'Include all applications', 'application-glass-all-windows');
     const opacityRow = this.controls.number(group, 'Content opacity', ['application-content-opacity'], 0, 1, 0.05);
+    const cornerRow = this.controls.toggle(group, 'Corner on maximized windows', 'application-corner-on-maximized');
+    const glassRow = this.controls.toggle(group, 'Glass on maximized windows', 'application-glass-on-maximized');
     this.settings.bind('enable-application-glass', allRow, 'visible', Gio.SettingsBindFlags.GET);
     this.settings.bind('enable-application-glass', opacityRow, 'visible', Gio.SettingsBindFlags.GET);
+    this.settings.bind('enable-application-glass', cornerRow, 'visible', Gio.SettingsBindFlags.GET);
+    this.settings.bind('enable-application-glass', glassRow, 'visible', Gio.SettingsBindFlags.GET);
     for (const [all, key, title] of [
       [false, 'application-window-whitelist', 'Included applications'],
       [true, 'application-window-blacklist', 'Excluded applications'],

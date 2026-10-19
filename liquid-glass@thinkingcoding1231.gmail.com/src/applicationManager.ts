@@ -71,6 +71,9 @@ interface WindowState {
   frameLocalActorPos?: [number, number];
   // Inputs of the last geometry sync, compared exactly each frame.
   geomSig?: Float64Array;
+
+  // Whether the window is maximized.
+  maximized: boolean;
 }
 
 export class ApplicationManager {
@@ -85,6 +88,8 @@ export class ApplicationManager {
   private _frameSignalId = 0;
   private _lastTickUs = 0;
   private _glassMargin = GLASS_MIN_MARGIN;
+  private _cornerOnMaximized = false;
+  private _glassOnMaximized = true;
 
   constructor(extensionPath: string, settings: Gio.Settings, logger: Logger) {
     this._extensionPath = extensionPath;
@@ -167,6 +172,11 @@ export class ApplicationManager {
     connectSetting('application-glass-all-windows', () => this._syncWhitelist());
     connectSetting('application-window-whitelist', () => this._syncWhitelist());
     connectSetting('application-window-blacklist', () => this._syncWhitelist());
+
+    connectSetting('application-corner-on-maximized', () => { this._cornerOnMaximized = this._settings.get_boolean('application-corner-on-maximized'); this._updateMaximized() });
+    connectSetting('application-glass-on-maximized', () => { this._glassOnMaximized = this._settings.get_boolean('application-glass-on-maximized'); this._updateMaximized() });
+    this._cornerOnMaximized = this._settings.get_boolean('application-corner-on-maximized');
+    this._glassOnMaximized = this._settings.get_boolean('application-glass-on-maximized')
 
     // The shadow renders into the margin, so these resize the glass.
     connectSetting('shadow-radius', () => this._updateGlassMargin());
@@ -350,6 +360,7 @@ export class ApplicationManager {
   _updateEffectParams() {
     for (const state of this._states.values())
       this._applyAppearance(state.glass, state.profile);
+    this._updateMaximized();
   }
 
   _applyAppearance(glass: BackdropGlass, profile: GlassProfile): void {
@@ -421,6 +432,12 @@ export class ApplicationManager {
     glass.setShadowMaxRadius(Math.max(0, this._glassMargin - SHADOW_MARGIN_HEADROOM));
     windowActor.insert_child_below(glass, surfaceActor);
 
+    let maximized = false;
+    const metaWin = windowActor.get_meta_window();
+    if (metaWin) {
+      maximized = metaWin.maximized_horizontally || metaWin.maximized_vertically;
+    }
+
     const state: WindowState = {
       profile,
       windowActor,
@@ -428,6 +445,7 @@ export class ApplicationManager {
       originalOpacity,
       glass,
       signals: [],
+      maximized,
     };
     this._states.set(windowActor, state);
 
@@ -439,12 +457,23 @@ export class ApplicationManager {
       }),
     });
 
-    const metaWin = windowActor.get_meta_window();
     if (metaWin) {
       state.signals.push({
         obj: metaWin,
         // Maximize and tiling change the invisible border.
         id: metaWin.connect('size-changed', () => { state.frameLocal = undefined; }),
+      });
+      state.signals.push({
+        obj: metaWin,
+        id: metaWin.connect('notify::maximized-horizontally', () => {
+          this._updateMaximized(state);
+        }),
+      });
+      state.signals.push({
+        obj: metaWin,
+        id: metaWin.connect('notify::maximized-vertically', () => {
+          this._updateMaximized(state);
+        }),
       });
     }
 
@@ -484,6 +513,34 @@ export class ApplicationManager {
     }
 
     return state.frameLocal ?? [0, 0];
+  }
+
+  _updateMaximized(state: WindowState | null = null): void {
+    const apply = (state: WindowState) => {
+      const metaWin = state.windowActor.get_meta_window();
+      if (!metaWin) return;
+
+      state.maximized = metaWin.maximized_horizontally || metaWin.maximized_vertically;
+
+      const shouldHideCorner = !this._cornerOnMaximized && state.maximized;
+      const shouldHideGlass = !this._glassOnMaximized && state.maximized;
+
+      state.glass.setCornerRadius(shouldHideCorner ? 0 : this._settings.get_double('application-corner-radius'));
+
+      if (isActorValid(state.surfaceActor)) {
+        state.surfaceActor.opacity = shouldHideGlass
+          ? state.originalOpacity
+          : Math.round(this._getContentOpacity(state.profile) * 255);
+
+        this._hideGlass(state);
+      }
+    };
+    if (!state) {
+      for (const state of this._states.values())
+        apply(state);
+    } else {
+      apply(state);
+    }
   }
 
   // Hides the glass while its window is not shown on this workspace. The
@@ -534,6 +591,11 @@ export class ApplicationManager {
       return false;
     }
 
+    const shouldHideGlass = !this._glassOnMaximized && state.maximized;
+    if (shouldHideGlass) {
+      this._hideGlass(state);
+      return false;
+    }
     setActorVisible(state.glass, true);
 
     const [frameLocalX, frameLocalY] = this._frameLocalOffset(state, actor, rect, bufferRect);

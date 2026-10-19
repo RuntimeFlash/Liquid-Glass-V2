@@ -564,6 +564,16 @@
       <default>30.0</default>
       <summary>Corner radius</summary>
     </key>
+    <key name="application-corner-on-maximized" type="b">
+      <default>false</default>
+      <summary>Corner on maximized windows</summary>
+      <description>Whether the glass effect should be applied to the corners of the screen when the window is maximized.</description>
+    </key>
+    <key name="application-glass-on-maximized" type="b">
+      <default>true</default>
+      <summary>Glass on maximized windows</summary>
+      <description>Whether the glass effect should be applied to the window when it is maximized.</description>
+    </key>
     <key name="application-content-opacity" type="d">
       <default>0.85</default>
       <summary>Window content opacity</summary>
