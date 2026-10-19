@@ -49,10 +49,20 @@ const THROW = 16;
 const PUSH = 3.65;
 const PUSH_MIN = 0.67;
 // The capsule draws into a drop this many times the button's height across,
-// while it drops this many heights below the button.
+// while the springs, started on a slow clock that comes up to full speed as
+// the capsule ends, carry it a little way down. The clock runs at CLOCK_START
+// at first, and the springs start with CAPSULE_PUSH times the way to the menu
+// per second.
 const DROP_SIZE = 1.15;
-const DROP_FALL = 2;
 const CAPSULE_S = 0.14;
+const CLOCK_START = 0.3;
+const CLOCK_POWER = 8;
+const CAPSULE_PUSH = 2.2;
+// Opening from a capsule that a reversal left behind: it first rounds into the drop this long.
+const ROUND_S = 0.1;
+// Opening from a reversal, the glass opacity and the softening come back to
+// their open values over this long.
+const REVEAL_S = 0.12;
 // The springs swing the drop past the menu; as it swells to the menu's size,
 // all but this much of the swing is taken out, so the grown glass does not
 // shoot back over the menu.
@@ -108,6 +118,22 @@ const easeOut = (t) => 1 - (1 - t) ** 2;
 
 const easeInOut = (t) => t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
 
+// Closing, the items are as faded as the opening had them at this many times
+// the time it took to reach the size, so they stay longer.
+const CLOSE_FADE_HOLD = 1.0;
+// How the items fade in as the glass opens, every FADE_STEP_S from its start.
+const FADE_STEP_S = 0.002;
+const OPEN_FADE = (() => {
+    const fade = new Spring(0, CONTENT_FADE[0], CONTENT_FADE[1]);
+    fade.target = 1;
+    const values = [];
+    for (let t = 0; t < 1; t += FADE_STEP_S) {
+        values.push(clamp01(fade.value));
+        fade.step(FADE_STEP_S);
+    }
+    return values;
+})();
+
 function clamp01(t) {
     return Math.min(Math.max(t, 0), 1);
 }
@@ -132,6 +158,12 @@ export class MenuMorphMotion {
     // Opening, how round the corners start, as a fraction of the roundest they
     // can be; closing, the radius they start from.
     _radiusFrom;
+    // Opening from a reversal: how long the capsule takes to round into a drop
+    // before the glass grows. 0 when it is not a capsule.
+    _roundS = 0;
+    // Opening from a reversal: the glass opacity and softening it had.
+    _glassFrom = 1;
+    _softenFrom = 0;
     _contentFrom;
     _lensFrom;
     // Closing: when the drop came near the button, and its size then.
@@ -142,6 +174,8 @@ export class MenuMorphMotion {
     _furthest = 0;
     _soften = 0;
     _frame;
+    _pushVx = 0;
+    _pushVy = 0;
 
     /**
      * Starts towards the menu (`opening`) or back to the button, from `from`
@@ -163,26 +197,34 @@ export class MenuMorphMotion {
         const [stiffness, damping] = opening ? OPEN_MOVE : CLOSE_MOVE;
         // The drop is thrown from where it fell to.
         const [cx, y] = centre(start.body);
-        const cy = y + (this._capsuleS ? this._fall() : 0);
         this._x = new Spring(cx, stiffness, damping);
-        this._y = new Spring(cy, stiffness, damping);
+        this._y = new Spring(y, stiffness, damping);
         this._opacity = new Spring(start.contentOpacity, CONTENT_FADE[0], CONTENT_FADE[1]);
         if (velocities)
             [this._x.velocity, this._y.velocity] = velocities;
         const drop = this._drop();
         this._sizeFrom = this._capsuleS ? [drop, drop] : [start.body[2], start.body[3]];
-        this._radiusFrom = opening ? (from ? start.bodyRadius / Math.max(Math.min(start.body[2], start.body[3]) / 2, 1) : 1)
+        this._radiusFrom = opening
+            ? start.bodyRadius / Math.max(Math.min(start.body[2], start.body[3]) / 2, 1)
             : start.bodyRadius;
+        if (opening && from) {
+            const [fw, fh] = [start.body[2], start.body[3]];
+            if (Math.min(fw, fh) <= drop * 1.01 && Math.max(fw, fh) > drop * 1.05)
+                this._roundS = ROUND_S;
+        }
         this._contentFrom = start.contentScale;
         this._lensFrom = start.lens;
+        this._glassFrom = start.glassOpacity;
+        this._softenFrom = start.soften;
         this._aim();
         if (opening && !velocities) {
+            const launch = this._capsuleS ? CAPSULE_PUSH : THROW * 0.5;
             for (const s of [this._x, this._y])
-                s.velocity = (s.target - s.value) * THROW;
+                s.velocity = (s.target - s.value) * launch;
             const angle = random() * Math.PI;
             const push = PUSH * Math.min(_menu[2], _menu[3]) * lerp(PUSH_MIN, 1, random());
-            this._x.velocity += Math.cos(angle) * push;
-            this._y.velocity += Math.sin(angle) * push;
+            this._pushVx = Math.cos(angle) * push;
+            this._pushVy = Math.sin(angle) * push;
         }
     }
 
@@ -204,10 +246,6 @@ export class MenuMorphMotion {
         this._aim();
     }
 
-    _fall() {
-        return this._buttonRect[3] * DROP_FALL;
-    }
-
     // The round drop between the capsule and the menu, px across.
     _drop() {
         const [, , w, h] = this._buttonRect;
@@ -220,44 +258,82 @@ export class MenuMorphMotion {
     }
 
     /** Advances by `elapsed` seconds. */
-    step(elapsed) {
-        const dt = Math.min(Math.max(elapsed, 0), MAX_FRAME_S);
+    step(elapsed, speed) {
+        let dt = Math.min(Math.max(elapsed, 0), MAX_FRAME_S);
+        dt *= speed;
         this._t += dt;
         this._frame = this.opening ? this._open(dt) : this._close(dt);
         return this._frame;
     }
 
-    _stepSprings(dt) {
+    _stepSprings(dt, motionOnly = false) {
+        const springs = motionOnly ? [this._x, this._y] : [this._x, this._y, this._opacity];
         for (let t = 0; t < dt; t += STEP_S) {
             const h = Math.min(STEP_S, dt - t);
-            for (const s of [this._x, this._y, this._opacity])
+            for (const s of springs)
                 s.step(h);
         }
     }
 
     _open(dt) {
+        if (this._capsuleS) {
+            // The springs run on a clock that is at full speed, with no
+            // acceleration of its own, where the capsule ends, so position,
+            // velocity and acceleration carry over without a step.
+            const before = this._t - dt;
+            const span = Math.min(this._t, this._capsuleS) - Math.min(before, this._capsuleS);
+            if (span > 0) {
+                const u = (before + span / 2) / this._capsuleS;
+                const ease = u * u * u * (u * (u * 6 - 15) + 10);
+                this._stepSprings(span * lerp(CLOCK_START, 1, ease ** CLOCK_POWER), true);
+            }
+        }
         if (this._t < this._capsuleS) {
-            // The capsule draws into a drop where it is.
             const t = this._t / this._capsuleS;
-            // It leaves the button as a capsule and rounds off on the way down,
-            // falling faster and faster into the throw.
+            // It leaves the button as a capsule and rounds off on the way down.
             const k = easeInOut(clamp01((t - 0.3) / 0.7));
-            const [bx, by, bw, bh] = this._buttonRect;
+            const [, , bw, bh] = this._buttonRect;
             const drop = this._drop();
             const w = lerp(bw, drop, k), h = lerp(bh, drop, k);
-            const y = by + bh / 2 + this._fall() * t ** 1.5;
-            return { body: [bx + bw / 2 - w / 2, y - h / 2, w, h], bodyRadius: Math.min(w, h) / 2,
-                contentScale: CONTENT_CLOSED_SCALE, contentOpacity: 0, lens: 1, glassOpacity: 1, soften: 0, done: false };
+            const x = this._x.value, y = this._y.value;
+            this._radiusFrom = 1;
+            return {
+                body: [x - w / 2, y - h / 2, w, h], bodyRadius: Math.min(w, h) / 2,
+                contentScale: CONTENT_CLOSED_SCALE, contentOpacity: 0, lens: 1, glassOpacity: 1, soften: 0, done: false
+            };
         }
-        this._stepSprings(Math.min(dt, this._t - this._capsuleS));
         const t = this._t - this._capsuleS;
-        const k = openSize(clamp01(t / OPEN_SIZE_S));
-        const w = lerp(this._sizeFrom[0], this._menu[2], k);
-        const h = lerp(this._sizeFrom[1], this._menu[3], k);
-        // The corners square off as the glass grows, and are the menu's once it has.
-        const radius = lerp(this._radiusFrom * Math.min(w, h) / 2, this._menuRadius, k);
+        this._stepSprings(Math.min(dt, t));
+        if (t > 0 && t < 0.2 && (this._pushVx !== 0 || this._pushVy !== 0)) {
+            const forceFactor = Math.sin((t / 0.2) * Math.PI) * (dt / 0.2);
+            this._x.velocity += this._pushVx * forceFactor;
+            this._y.velocity += this._pushVy * forceFactor;
+        }
+        const g = t - this._roundS;
+        let w, h, radius;
+        if (g < 0) {
+            // A capsule from a reversal goes through the round drop before it grows.
+            const drop = this._drop();
+            const c = easeInOut(clamp01(t / this._roundS));
+            w = lerp(this._sizeFrom[0], drop, c);
+            h = lerp(this._sizeFrom[1], drop, c);
+            radius = Math.min(w, h) / 2;
+        }
+        else {
+            const from = this._roundS ? [this._drop(), this._drop()] : this._sizeFrom;
+            const k = openSize(clamp01(g / OPEN_SIZE_S));
+            w = lerp(from[0], this._menu[2], k);
+            h = lerp(from[1], this._menu[3], k);
+            // The corners square off as the glass grows, and are the menu's once it has.
+            const menuRound = this._menuRadius / Math.max(Math.min(this._menu[2], this._menu[3]) / 2, 1);
+            const roundFrom = this._roundS ? 1 : this._radiusFrom;
+            radius = lerp(roundFrom, menuRound, k) * Math.min(w, h) / 2;
+        }
+        const k = openSize(clamp01(Math.max(g, 0) / OPEN_SIZE_S));
+        const reveal = clamp01(t / REVEAL_S);
         const moving = !this._x.settled(0.5) || !this._y.settled(0.5);
-        const swing = lerp(1, SETTLED_SWING, k);
+        // Cubed, so the swing starts being taken out with no step in velocity or acceleration.
+        const swing = lerp(1, SETTLED_SWING, k ** 3);
         const x = this._x.target + (this._x.value - this._x.target) * swing;
         const y = this._y.target + (this._y.value - this._y.target) * swing;
         return {
@@ -266,26 +342,44 @@ export class MenuMorphMotion {
             contentScale: lerp(this._contentFrom, 1, easeOut(clamp01(t / CONTENT_SCALE_S))),
             contentOpacity: clamp01(this._opacity.value),
             lens: this._lensFrom * (1 - clamp01(t / LENS_S) ** 2),
-            glassOpacity: 1,
-            soften: 0,
-            done: !moving && t >= OPEN_SIZE_S,
+            glassOpacity: lerp(this._glassFrom, 1, reveal),
+            soften: lerp(this._softenFrom, 0, reveal),
+            done: !moving && g >= OPEN_SIZE_S,
         };
+    }
+
+    // The items fade as they did when the glass opened to this size.
+    _closeOpacity(w, h) {
+        const drop = this._drop();
+        const grown = Math.min((w - drop) / Math.max(this._menu[2] - drop, 1), (h - drop) / Math.max(this._menu[3] - drop, 1));
+        const k = clamp01(grown);
+        let lo = 0, hi = 1;
+        for (let i = 0; i < 16; i++) {
+            const mid = (lo + hi) / 2;
+            if (openSize(mid) < k)
+                lo = mid;
+            else
+                hi = mid;
+        }
+        return OPEN_FADE[Math.min(Math.round(lo * OPEN_SIZE_S * CLOSE_FADE_HOLD / FADE_STEP_S), OPEN_FADE.length - 1)];
     }
 
     _close(dt) {
         this._stepSprings(dt);
         const t = this._t;
         const drop = this._drop();
+        const targetW = Math.min(this._sizeFrom[0], drop);
+        const targetH = Math.min(this._sizeFrom[1], drop);
         const k = easeOut(clamp01(t / CLOSE_SIZE_S));
-        const w = lerp(this._sizeFrom[0], drop, k);
-        const h = lerp(this._sizeFrom[1], drop, k);
+        const w = lerp(this._sizeFrom[0], targetW, k);
+        const h = lerp(this._sizeFrom[1], targetH, k);
         // Rounding off into the drop as it shrinks, as the opening squares off as it grows.
         const radius = lerp(this._radiusFrom, Math.min(w, h) / 2, k);
         let body = [this._x.value - w / 2, this._y.value - h / 2, w, h];
         let bodyRadius = Math.min(radius, w / 2, h / 2);
         const [hx, hy] = centre(this._buttonRect);
         const near = Math.hypot(this._x.value - hx, this._y.value - hy) <= this._buttonRect[3] * ARRIVE_HEIGHTS;
-        if (this._arrivedAt < 0 && ((near && t >= CLOSE_SIZE_S) || t >= ARRIVE_MAX_S)) {
+        if (this._arrivedAt < 0 && ((near && t >= CLOSE_SIZE_S) || t >= ARRIVE_MAX_S || this._sizeFrom[0] <= drop)) {
             this._arrivedAt = t;
             this._arrivedSize = [w, h];
         }
@@ -315,8 +409,8 @@ export class MenuMorphMotion {
             body,
             bodyRadius,
             contentScale: lerp(this._contentFrom, CONTENT_CLOSED_SCALE, easeOut(clamp01(t / CONTENT_SCALE_S))),
-            contentOpacity: clamp01(this._opacity.value),
-            lens: 0,
+            contentOpacity: this._closeOpacity(w, h),
+            lens: lerp(this._lensFrom, 1, easeOut(clamp01(t / LENS_S))),
             glassOpacity,
             soften,
             done: glassOpacity === 0,

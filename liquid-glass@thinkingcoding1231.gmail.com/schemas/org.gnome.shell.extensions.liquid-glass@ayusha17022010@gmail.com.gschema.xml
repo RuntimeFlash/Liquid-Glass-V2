@@ -70,6 +70,11 @@
       <summary>Grow the menu out of its button</summary>
       <description>While animations are on, the glass leaves the button as a drop and stretches into the menu, and goes back into the button when the menu closes.</description>
     </key>
+    <key name="menu-morph-speed" type="d">
+      <default>1.0</default>
+      <summary>Menu morph speed</summary>
+      <description>How fast the menu grows out of the button, and how fast it shrinks back into it. Default speed is 1.0</description>
+    </key>
     <key name="menu-spring-stiffness" type="d">
       <default>120.0</default>
       <summary>Spring stiffness</summary>
@@ -176,6 +181,11 @@
       <default>false</default>
       <summary>Grow the menu out of its button</summary>
       <description>While animations are on, the glass leaves the button as a drop and stretches into the menu, and goes back into the button when the menu closes.</description>
+    </key>
+    <key name="panel-menu-morph-speed" type="d">
+      <default>1.0</default>
+      <summary>Menu morph speed</summary>
+      <description>How fast the menu grows out of the button, and how fast it shrinks back into it. Default speed is 1.0</description>
     </key>
     <key name="panel-menu-spring-stiffness" type="d">
       <default>120.0</default>

@@ -3,11 +3,11 @@ import Gtk from 'gi://Gtk';
 import {SURFACE_OPTIONS, APPEARANCE, LAYOUT, SPRING, OPTICS, LIGHTING, SHADOWS} from './advanced-model.js';
 import {ADAPTIVE_SURFACES, TOP_BAR} from './model.js';
 import {addPanelMenus} from './panel-menus.js';
-import {Branch} from './branch.js';
+import {Branch, ToggleBranch} from './branch.js';
 
 function addNumbers(group, controls, specs, prefix = '', slider = true) {
   return new Map(specs.map(([key, title, min, max, step]) => [key,
-    controls.number(group, title, [`${prefix}${key}`], min, max, step, '', {slider})]));
+    controls.number(group, title, [`${prefix}${key}`], min, max, step, '', { slider })]));
 }
 
 function addMotion(group, controls, surface) {
@@ -15,19 +15,35 @@ function addMotion(group, controls, surface) {
   const toggle = controls.toggle(group, 'Animations', key);
   const branch = new Branch(toggle);
   if (surface !== 'quick-settings') {
-    branch.add(controls.toggle(group, 'Grow from the button', `${surface}-grow-from-button`,
+    const morphToggle = branch.add(controls.toggle(group, 'Grow from the button', `${surface}-grow-from-button`,
       'The glass leaves the button as a drop and stretches into the menu'));
+    // Spring constants and intervals mean their number; no slider.
+    const morphBranch = new ToggleBranch(morphToggle, 2);
+    morphBranch.add(controls.number(group, 'Morph speed', [`${surface}-morph-speed`], 0.1, 3, 0.1, '', {slider: false}), 0);
+    for (const row of addNumbers(group, controls, SPRING, `${surface}-`, false).values()) morphBranch.add(row, 1);
+    const updateMorph = () => {
+      morphBranch.switch = controls.settings.get_boolean(`${surface}-grow-from-button`) ? 0 : 1;
+    };
+    const updateMotion = () => {
+      const on = controls.settings.get_boolean(key);
+      branch.enabled = on;
+      morphBranch.enabled = on;
+      updateMorph();
+    };
+    controls.watch([key], updateMotion);
+    controls.watch([`${surface}-grow-from-button`], updateMorph);
+    updateMotion();
+  } else {
+    for (const row of addNumbers(group, controls, SPRING, `${surface}-`, false).values()) branch.add(row);
+    controls.watch([key], () => { branch.enabled = controls.settings.get_boolean(key); });
   }
-  // Spring constants and intervals mean their number; no slider.
-  for (const row of addNumbers(group, controls, SPRING, `${surface}-`, false).values()) branch.add(row);
-  controls.watch([key], () => { branch.enabled = controls.settings.get_boolean(key); });
 }
 
 function addOutline(group, controls, surface) {
   const key = `${surface}-outline-enabled`;
   const toggle = controls.toggle(group, 'Outline', key, 'A line along the visible edge of the glass, for seeing it better');
   const branch = new Branch(toggle);
-  branch.add(controls.number(group, 'Outline width', [`${surface}-outline-width`], 0.5, 10, 0.5, '', {slider: true}));
+  branch.add(controls.number(group, 'Outline width', [`${surface}-outline-width`], 0.5, 10, 0.5, '', { slider: true }));
   branch.add(controls.color(group, 'Outline color', [`${surface}-outline-color`]));
   controls.watch([key], () => { branch.enabled = controls.settings.get_boolean(key); });
 }
@@ -63,9 +79,9 @@ function addSurface(page, controls, surface, title) {
     branch.add(controls.number(group, 'Adaptive color interval (ms)', [`${surface}-sample-interval-ms`], 100, 2000, 50));
     const preferenceKey = `${surface}-adaptive-text-preference`;
     branch.add(controls.choice(group, 'Preferred text color', [
-      {title: 'Automatic', patch: {[preferenceKey]: 'auto'}},
-      {title: 'Light', patch: {[preferenceKey]: 'light'}},
-      {title: 'Dark', patch: {[preferenceKey]: 'dark'}},
+      { title: 'Automatic', patch: { [preferenceKey]: 'auto' } },
+      { title: 'Light', patch: { [preferenceKey]: 'light' } },
+      { title: 'Dark', patch: { [preferenceKey]: 'dark' } },
     ], 'Decides only when both colors are equally readable', false));
     controls.watch([key], () => { branch.enabled = controls.settings.get_boolean(key); });
   }
@@ -75,12 +91,12 @@ function addSurface(page, controls, surface, title) {
 function addRendering(page, controls) {
   const blur = controls.group(page, 'Blur');
   controls.choice(blur, 'Method', [
-    {title: 'Gaussian', patch: {'blur-method': 0}},
-    {title: 'Dual Kawase', patch: {'blur-method': 1}},
+    { title: 'Gaussian', patch: { 'blur-method': 0 } },
+    { title: 'Dual Kawase', patch: { 'blur-method': 1 } },
   ]);
   controls.choice(blur, 'Resolution', [
-    {title: 'Half', patch: {'glass-blur-downscale': 2}},
-    {title: 'Quarter', patch: {'glass-blur-downscale': 4}},
+    { title: 'Half', patch: { 'glass-blur-downscale': 2 } },
+    { title: 'Quarter', patch: { 'glass-blur-downscale': 4 } },
   ]);
   const groups = [blur];
   for (const [title, specs] of [['Optics', OPTICS], ['Lighting', LIGHTING], ['Shadows', SHADOWS]]) {
@@ -97,8 +113,10 @@ function addRendering(page, controls) {
 
 export function buildAdvancedPreferences(pages, controls) {
   const selectorGroup = controls.group(pages.appearance, 'Individual effects');
-  const selector = new Adw.ComboRow({title: 'Surface', selected: 0,
-    model: Gtk.StringList.new(SURFACE_OPTIONS.map(([, title]) => title))});
+  const selector = new Adw.ComboRow({
+    title: 'Surface', selected: 0,
+    model: Gtk.StringList.new(SURFACE_OPTIONS.map(([, title]) => title))
+  });
   selectorGroup.add(selector);
   const surfaces = new Map();
   const effects = controls.group(pages.effects, 'Individual effects');
