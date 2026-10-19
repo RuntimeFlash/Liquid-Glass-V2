@@ -90,20 +90,26 @@ export function resizeRect(rect: Rect, hx: HandleSide, hy: HandleSide, dx: numbe
   return out;
 }
 
+// Where the user moved an item to: the fraction of the work area its centre
+// was at, and the item's height then. The height keeps its top edge in place
+// when the content grows or shrinks; older entries have none.
+export type SavedPosition = [number, number] | [number, number, number];
+
 // The positions the user moved items to, by item id, as stored in the
 // `desktop-item-positions` setting. Anything unreadable counts as none.
-export function parsePositions(json: string): Record<string, [number, number]> {
+export function parsePositions(json: string): Record<string, SavedPosition> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json || '{}');
   } catch {
     return {};
   }
-  const out: Record<string, [number, number]> = {};
+  const out: Record<string, SavedPosition> = {};
   if (!parsed || typeof parsed !== 'object') return out;
   for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
-    if (Array.isArray(value) && value.length === 2 && value.every(v => typeof v === 'number' && Number.isFinite(v)))
-      out[id] = [value[0], value[1]];
+    if (Array.isArray(value) && (value.length === 2 || value.length === 3) &&
+        value.every(v => typeof v === 'number' && Number.isFinite(v)))
+      out[id] = value.length === 2 ? [value[0], value[1]] : [value[0], value[1], value[2]];
   }
   return out;
 }
@@ -151,4 +157,50 @@ export function placeBeside(frame: Rect, size: [number, number], gap: number, ar
   };
   const [x, y] = candidates.find(fits) ?? [cx, clamp(candidates[0][1], area.y, area.height - h)];
   return [Math.round(x), Math.round(y)];
+}
+
+// Items put one above the other stay a stack: the farthest apart two are
+// still taken as neighbours.
+const COLUMN_GAP = ITEM_GAP * 4;
+
+function shareColumn(a: Rect, b: Rect): boolean {
+  const overlap = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+  return overlap >= Math.min(a.width, b.width) / 2;
+}
+
+/**
+ * Where items the user moved go, given each one's rect as it was put and its
+ * size now. Items that were put in a column are kept in one: the topmost shown
+ * stays where it was and the rest follow it with the usual gap, so an item that
+ * grows, shrinks or is hidden moves the ones below it instead of overlapping them
+ * or leaving a hole. Returns each item's top left corner, in the order given;
+ * a hidden item's is not used.
+ */
+export function stackColumns(items: { saved: Rect, size: [number, number], shown: boolean }[], area: Rect): [number, number][] {
+  const order = items.map((_, i) => i).sort((a, b) => items[a].saved.y - items[b].saved.y);
+  const columns: number[][] = [];
+  for (const i of order) {
+    const r = items[i].saved;
+    let best: number[] | null = null;
+    for (const column of columns) {
+      const last = items[column[column.length - 1]].saved;
+      if (!shareColumn(last, r) || r.y - (last.y + last.height) > COLUMN_GAP) continue;
+      if (!best || last.y > items[best[best.length - 1]].saved.y) best = column;
+    }
+    if (best) best.push(i);
+    else columns.push([i]);
+  }
+  const out: [number, number][] = new Array(items.length);
+  for (const column of columns) {
+    const shown = column.filter(i => items[i].shown);
+    for (const i of column) out[i] = [Math.round(items[i].saved.x), Math.round(items[i].saved.y)];
+    if (shown.length === 0) continue;
+    const total = shown.reduce((sum, i) => sum + items[i].size[1], 0) + ITEM_GAP * (shown.length - 1);
+    let y = Math.max(Math.min(items[shown[0]].saved.y, area.y + area.height - total), area.y);
+    for (const i of shown) {
+      out[i][1] = Math.round(y);
+      y += items[i].size[1] + ITEM_GAP;
+    }
+  }
+  return out;
 }

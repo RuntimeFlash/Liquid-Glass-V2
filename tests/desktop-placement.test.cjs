@@ -62,3 +62,33 @@ test('the Done button stays on the work area when nowhere beside its frame is fr
   const full = { x: -10, y: 20, width: 1940, height: 1070 };
   assert.deepEqual(placement.placeBeside(full, [80, 30], 14, area, []), [920, 1050]);
 });
+
+test('a moved item\'s saved height keeps its top edge in place', () => {
+  assert.deepEqual(placement.parsePositions('{"a":[0.5,0.25],"b":[0.1,0.2,80],"c":[1],"d":["x",1]}'),
+    { a: [0.5, 0.25], b: [0.1, 0.2, 80] });
+});
+
+test('items put in a column stay a stack when one of them changes size or is hidden', () => {
+  const area = { x: 0, y: 32, width: 1000, height: 800 };
+  const saved = [
+    { x: 24, y: 40, width: 270, height: 200 },
+    { x: 24, y: 256, width: 270, height: 70 },
+    { x: 24, y: 342, width: 270, height: 130 },
+    { x: 600, y: 300, width: 270, height: 100 },
+  ];
+  const sizes = [[270, 200], [270, 70], [270, 130], [270, 100]];
+  const place = (items, kept = items.map((_, i) => i)) =>
+    placement.stackColumns(items.map((saved, i) => ({ saved, size: sizes[i], shown: kept.includes(i) })), area);
+  assert.deepEqual(place(saved), [[24, 40], [24, 256], [24, 342], [600, 300]]);
+  sizes[1] = [270, 120];
+  assert.deepEqual(place(saved).slice(0, 3), [[24, 40], [24, 256], [24, 392]]);
+  sizes[1] = [270, 70];
+  assert.deepEqual(place(saved, [0, 2, 3]).slice(0, 2), [[24, 40], [24, 256]]);
+});
+
+test('a column that would run off the work area is moved up to fit', () => {
+  const area = { x: 0, y: 0, width: 1000, height: 400 };
+  const saved = [{ x: 0, y: 200, width: 200, height: 100 }, { x: 0, y: 316, width: 200, height: 80 }];
+  assert.deepEqual(placement.stackColumns(saved.map(r => ({ saved: r, size: [200, r.height + 60], shown: true })), area),
+    [[0, 84], [0, 260]]);
+});

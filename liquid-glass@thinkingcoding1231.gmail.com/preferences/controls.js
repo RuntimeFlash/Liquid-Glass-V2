@@ -26,11 +26,16 @@ export class PreferenceControls {
   }
 
   write(patch) {
-    const transaction = new Gio.Settings({settings_schema: this.settings.settings_schema, path: this.settings.path});
     const changes = Object.entries(patch).map(([key, value]) => [key,
       new GLib.Variant(this.settings.get_value(key).get_type_string(), value)]);
-    if (changes.some(([key, value]) => !transaction.is_writable(key) || !transaction.settings_schema.get_key(key).range_check(value)))
+    if (changes.some(([key, value]) => !this.settings.is_writable(key) || !this.settings.settings_schema.get_key(key).range_check(value)))
       throw new Error('These settings cannot be changed together');
+    this.commit(changes);
+  }
+
+  // [key, GLib.Variant] pairs written together, as one change.
+  commit(changes) {
+    const transaction = new Gio.Settings({settings_schema: this.settings.settings_schema, path: this.settings.path});
     transaction.delay();
     for (const [key, value] of changes) transaction.set_value(key, value);
     transaction.apply();

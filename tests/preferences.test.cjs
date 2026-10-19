@@ -124,7 +124,7 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
 test('preferences expose four pages and eight shared appearance controls', () => {
   const f = fixture();
   assert.deepEqual(f.window.children.map(page => page.title), ['Appearance', 'Effects', 'Desktop', 'Rendering']);
-  assert.equal(f.window.children[0].children.filter(group => group.title !== 'Settings' && group.visible !== false).flatMap(group => group.children).length, 8);
+  assert.equal(f.window.children[0].children.filter(group => !['Settings', 'Backup'].includes(group.title) && group.visible !== false).flatMap(group => group.children).length, 8);
   assert.equal(f.widgets.filter(widget => /Spring|Sample Interval|X Offset|Y Offset/.test(widget.title ?? '')).length, 0);
   assert.equal(f.window.search_enabled, true);
 });
@@ -411,4 +411,27 @@ test('the warning offers no button when Blur my Shell\'s settings cannot be foun
   const f = fixture();
   assert.ok(f.row('Blur my Shell is blurring popups'));
   assert.equal(f.widgets.find(widget => widget.label === 'Turn Off'), undefined);
+});
+
+test('exported settings are a dconf dump, and an import keeps only valid values of known keys', () => {
+  const values = {'dock-blur-radius': '12', 'enable-dock-glass': 'true', 'launcher-width': '680'};
+  const types = {'dock-blur-radius': 'i', 'enable-dock-glass': 'b', 'launcher-width': 'i'};
+  const GLib = {
+    VariantType: class { constructor(type) { this.type = type; } },
+    Variant: {parse(type, text) {
+      if (type.type === 'i' && !/^-?\d+$/.test(text)) throw new Error('not a number');
+      return {type: type.type, text};
+    }},
+  };
+  const settings = {
+    settings_schema: {list_keys: () => Object.keys(values), has_key: key => key in values,
+      get_key: key => ({range_check: variant => key !== 'launcher-width' || Number(variant.text) <= 1400})},
+    get_value: key => ({print: () => values[key], get_type_string: () => types[key]}),
+    is_writable: key => key !== 'enable-dock-glass',
+  };
+  const {dumpSettings, parseSettings} = createModuleLoader({Adw: {}, Gio: {}, Gtk: {}, GLib})(path.join(root, 'preferences/backup.js'));
+  assert.equal(dumpSettings(settings), '[/]\ndock-blur-radius=12\nenable-dock-glass=true\nlaunch' + 'er-width=680\n');
+  const result = parseSettings(settings, '[/]\ndock-blur-radius=9\nlauncher-width=5000\nenable-dock-glass=false\nmissing=1\nlauncher-width=abc\n');
+  assert.deepEqual(result.changes, [['dock-blur-radius', {type: 'i', text: '9'}]]);
+  assert.equal(result.skipped, 4);
 });

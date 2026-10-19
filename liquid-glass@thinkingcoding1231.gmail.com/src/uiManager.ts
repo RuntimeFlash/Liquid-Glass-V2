@@ -716,6 +716,9 @@ export class UIManager {
     this.targetActor.add_style_class_name('liquid-glass-transparent');
     this.animActor.add_style_class_name('liquid-glass-transparent');
     this.animActor.add_style_class_name('liquid-glass-menu-root');
+    this._syncStyleVariant();
+    const settings = St.Settings.get();
+    this._signals.push({ target: settings, id: settings.connect('notify::color-scheme', () => this._syncStyleVariant()) });
 
     this._menuXoffset = this._settings.get_int(this._key('x-offset'));
     this._menuYoffset = this._settings.get_int(this._key('y-offset'));
@@ -1598,11 +1601,18 @@ export class UIManager {
     }
   }
 
+  // The cards in the calendar menu are pale under the light shell theme.
+  private _syncStyleVariant() {
+    if (Main.getStyleVariant() === 'light') this.animActor.add_style_class_name('liquid-glass-light');
+    else this.animActor.remove_style_class_name('liquid-glass-light');
+  }
+
   private _restoreMenuActors() {
     if (!this._actorDestroyed) this.targetActor.remove_style_class_name('liquid-glass-transparent');
     if (!this._actorDestroyed && this.animActor) {
       this.animActor.remove_style_class_name('liquid-glass-transparent');
       this.animActor.remove_style_class_name('liquid-glass-menu-root');
+      this.animActor.remove_style_class_name('liquid-glass-light');
 
       this.animActor.translation_x = 0;
       this.animActor.translation_y = 0;

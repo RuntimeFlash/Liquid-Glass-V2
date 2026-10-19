@@ -41,14 +41,15 @@ function addLayout(group, controls, surface, appearance) {
 function addSurface(page, controls, surface, title) {
   const group = controls.group(page, title);
   if (surface === 'top-bar') controls.choice(group, 'Style', TOP_BAR, 'The bar itself; menus have their own entries', false);
+
   const appearance = addNumbers(group, controls, APPEARANCE, `${surface}-`);
   controls.color(group, 'Tint', [`${surface}-tint-color`]);
   addLayout(group, controls, surface, appearance);
   if (['menu', 'panel-menu', 'quick-settings'].includes(surface)) addMotion(group, controls, surface);
   if (ADAPTIVE_SURFACES.includes(surface)) {
     const key = `${surface}-enable-adaptive-text-color`;
-    controls.toggle(group, 'Automatic text contrast', key);
-    const row = controls.number(group, 'Contrast interval (ms)', [`${surface}-sample-interval-ms`], 100, 2000, 50);
+    controls.toggle(group, 'Adaptive color', key, 'Text and icons turn light or dark to stay readable on the glass');
+    const row = controls.number(group, 'Adaptive color interval (ms)', [`${surface}-sample-interval-ms`], 100, 2000, 50);
     const preferenceKey = `${surface}-adaptive-text-preference`;
     const preference = controls.choice(group, 'Preferred text color', [
       {title: 'Automatic', patch: {[preferenceKey]: 'auto'}},

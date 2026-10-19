@@ -124,7 +124,9 @@ export class AdaptiveTextColor {
       });
       this._styled.set(actor, entry);
     }
-    if (entry.color === color && !skip) return;
+    // A style that went back to the actor's own was reset by someone else; the colour is put on again.
+    const reset = entry.color !== '' && (actor.get_style() ?? '') === entry.style && !adaptiveColorTweener.isAnimating(actor);
+    if (entry.color === color && !skip && !reset) return;
     entry.color = color;
 
     const own = entry.style.trim();

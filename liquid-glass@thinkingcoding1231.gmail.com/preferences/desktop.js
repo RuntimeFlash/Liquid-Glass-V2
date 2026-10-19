@@ -257,28 +257,26 @@ function addClock(page, controls) {
   const group = controls.group(page, 'Glass clock',
     'A large clock whose digits are glass. Right-click it to move or resize it.');
   const show = controls.toggle(group, 'Show the clock', 'enable-glass-clock');
-  const rows = [
-    placeRow(group, controls, 'Place', 'glass-clock-position', 'clock'),
-    controls.number(group, 'Size', ['glass-clock-size'], 48, 480, 1, '', {slider: true}),
-    controls.number(group, 'Width', ['glass-clock-stretch'], 0.3, 4, 0.01, '', {slider: true}),
-    controls.number(group, 'Height', ['glass-clock-height'], 1, 3, 0.01, '', {slider: true}),
-    controls.choice(group, 'Taller digits', [
-      {title: 'Evenly', patch: {'glass-clock-tall-style': 'even'}},
-      {title: 'Along upright strokes', patch: {'glass-clock-tall-style': 'upright'}},
-    ], 'How the digits grow when the height is above 1', false),
-    controls.choice(group, 'Time format', [
-      {title: 'As in Settings', patch: {'glass-clock-format': 'system'}},
-      {title: '24-hour', patch: {'glass-clock-format': '24h'}},
-      {title: '12-hour', patch: {'glass-clock-format': '12h'}},
-    ], '', false),
-    controls.toggle(group, 'Show the date', 'glass-clock-show-date'),
-    controls.number(group, 'Blur', ['glass-clock-blur-radius'], 0, 30, 1, '', {slider: true}),
-    controls.number(group, 'Tint strength', ['glass-clock-tint-strength'], 0, 1, 0.01, '', {slider: true}),
-    ...fontRows(group, controls),
-  ];
-  controls.watch(['enable-glass-clock'], () => {
-    for (const row of rows) row.sensitive = show.active;
-  });
+  // Shown only while the clock is, so the page stays short when it is off.
+  const details = controls.group(page, '');
+  placeRow(details, controls, 'Place', 'glass-clock-position', 'clock');
+  controls.number(details, 'Size', ['glass-clock-size'], 48, 480, 1, '', {slider: true});
+  controls.number(details, 'Width', ['glass-clock-stretch'], 0.3, 4, 0.01, '', {slider: true});
+  controls.number(details, 'Height', ['glass-clock-height'], 1, 3, 0.01, '', {slider: true});
+  controls.choice(details, 'Taller digits', [
+    {title: 'Evenly', patch: {'glass-clock-tall-style': 'even'}},
+    {title: 'Along upright strokes', patch: {'glass-clock-tall-style': 'upright'}},
+  ], 'How the digits grow when the height is above 1', false);
+  controls.choice(details, 'Time format', [
+    {title: 'As in Settings', patch: {'glass-clock-format': 'system'}},
+    {title: '24-hour', patch: {'glass-clock-format': '24h'}},
+    {title: '12-hour', patch: {'glass-clock-format': '12h'}},
+  ], '', false);
+  controls.toggle(details, 'Show the date', 'glass-clock-show-date');
+  controls.number(details, 'Blur', ['glass-clock-blur-radius'], 0, 30, 1, '', {slider: true});
+  controls.number(details, 'Tint strength', ['glass-clock-tint-strength'], 0, 1, 0.01, '', {slider: true});
+  fontRows(details, controls);
+  controls.watch(['enable-glass-clock'], () => { details.visible = show.active; });
 }
 
 function addWidgets(page, controls) {
@@ -336,9 +334,10 @@ function addLauncher(page, controls) {
     {title: 'Ease', patch: {'launcher-pinned-transition': 'tween'}},
   ], 'Ctrl+P shows the pinned items. Morph flows the glass into its new shape with the content seen deep in it; ' +
     'Ease moves it smoothly and fades the content', false);
+  const width = controls.number(group, 'Width', ['launcher-width'], 320, 1400, 10, 'Of the search field and its results', {slider: true});
+  const height = controls.number(group, 'Pinned items height', ['launcher-pinned-height'], 240, 1200, 10, '', {slider: true});
   controls.watch(['enable-launcher'], () => {
-    shortcut.sensitive = show.active;
-    transition.sensitive = show.active;
+    for (const row of [shortcut, transition, width, height]) row.sensitive = show.active;
   });
 }
 

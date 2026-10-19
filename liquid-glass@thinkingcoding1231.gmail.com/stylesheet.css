@@ -94,13 +94,34 @@
     background-color: rgba(65, 65, 65, 0.8) !important;
 }
 
-/* Quick Settings sliders sit on a translucent card. */
-.liquid-glass-qs-root .quick-slider {
-    background-color: rgba(255, 255, 255, 0.15) !important;
-    border-radius: 20px !important;
-    padding: 24px 24px !important;
-    margin-bottom: 8px !important;
-    box-shadow: none !important;
+/* The same cards for the light shell theme: a pale card under dark text. */
+.liquid-glass-menu-root.liquid-glass-light .calendar {
+    background-color: rgba(255, 255, 255, 0.45) !important;
+}
+
+.liquid-glass-menu-root.liquid-glass-light StButton:hover {
+    background-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+.liquid-glass-menu-root.liquid-glass-light StButton:active,
+.liquid-glass-menu-root.liquid-glass-light StButton:checked,
+.liquid-glass-menu-root.liquid-glass-light StButton:focus {
+    background-color: rgba(0, 0, 0, 0.14) !important;
+}
+
+.liquid-glass-menu-root.liquid-glass-light .events-button,
+.liquid-glass-menu-root.liquid-glass-light .world-clocks-button,
+.liquid-glass-menu-root.liquid-glass-light .message {
+    background-color: rgba(255, 255, 255, 0.6) !important;
+}
+
+.liquid-glass-menu-root.liquid-glass-light .message:hover,
+.liquid-glass-menu-root.liquid-glass-light .message:focus,
+.liquid-glass-menu-root.liquid-glass-light .events-button:hover,
+.liquid-glass-menu-root.liquid-glass-light .events-button:focus,
+.liquid-glass-menu-root.liquid-glass-light .world-clocks-button:hover,
+.liquid-glass-menu-root.liquid-glass-light .world-clocks-button:focus {
+    background-color: rgba(255, 255, 255, 0.75) !important;
 }
 
 /* Desktop widgets. The card's glass is drawn behind it; the colours here are

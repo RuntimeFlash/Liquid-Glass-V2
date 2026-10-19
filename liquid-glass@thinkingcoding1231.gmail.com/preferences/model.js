@@ -51,6 +51,7 @@ export const TOP_BAR = [
   {title: 'Three pills', patch: {'top-bar-style': 'islands'}},
 ];
 
+
 export const booleanChoices = keys => [
   {title: 'Off', patch: uniformPatch(keys, false)},
   {title: 'On', patch: uniformPatch(keys, true)},

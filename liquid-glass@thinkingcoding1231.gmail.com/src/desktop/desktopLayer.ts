@@ -13,7 +13,7 @@ import { MENU_ANIMATION } from '../shellVersion.js';
 import { UIManager } from '../uiManager.js';
 import { type DesktopItem, type ItemEnv } from './desktopItem.js';
 import { EditFrame, itemRect } from './editFrame.js';
-import { type Anchor, type Rect, coversRect, parseAnchors, parsePositions, placeAtFraction, fractionOf, sanitizeAnchor, stackAt } from './placement.js';
+import { type Anchor, type Rect, coversRect, parseAnchors, parsePositions, placeAtFraction, fractionOf, sanitizeAnchor, stackAt, stackColumns } from './placement.js';
 import { WeatherWidget } from './weather.js';
 import { EventsWidget } from './events.js';
 import { MediaWidget } from './media.js';
@@ -284,28 +284,36 @@ export class DesktopLayer {
     const area = this._workArea();
     const moved = parsePositions(this._settings.get_string('desktop-item-positions'));
     const stacks = new Map<Anchor, DesktopItem[]>();
+    const movedItems: { item: DesktopItem, saved: Rect, size: [number, number], shown: boolean }[] = [];
     for (const [id, item] of this._items) {
-      if (!item.shown) continue;
       // The frame holds the item while it is being dragged.
       if (this._edit?.dragging && this._edit.item === item) continue;
       const fraction = moved[id];
+      // A hidden item still counts for which of the others sit in its column.
       if (fraction) {
-        item.actor.set_position(...placeAtFraction(fraction, area, item.size()));
+        const [w, h] = item.size();
+        const [x, y] = placeAtFraction([fraction[0], fraction[1]], area, [w, fraction[2] ?? h]);
+        movedItems.push({ item, saved: { x, y, width: w, height: fraction[2] ?? h }, size: [w, h], shown: item.shown });
         continue;
       }
+      if (!item.shown) continue;
       const anchor = this._anchorOf(id);
       if (!stacks.has(anchor)) stacks.set(anchor, []);
       stacks.get(anchor)!.push(item);
     }
+    const positions = stackColumns(movedItems, area);
+    movedItems.forEach(({ item, shown }, i) => {
+      if (shown) item.actor.set_position(...positions[i]);
+    });
     for (const [anchor, items] of stacks) {
-      const positions = stackAt(anchor, area, items.map(item => item.size()));
-      items.forEach((item, i) => item.actor.set_position(...positions[i]));
+      const stacked = stackAt(anchor, area, items.map(item => item.size()));
+      items.forEach((item, i) => item.actor.set_position(...stacked[i]));
     }
   }
 
   private _savePosition(item: DesktopItem, pos: [number, number], size: [number, number]): void {
     const positions = parsePositions(this._settings.get_string('desktop-item-positions'));
-    positions[item.id] = fractionOf(pos, this._workArea(), size);
+    positions[item.id] = [...fractionOf(pos, this._workArea(), size), size[1]];
     this._settings.set_string('desktop-item-positions', JSON.stringify(positions));
   }
 

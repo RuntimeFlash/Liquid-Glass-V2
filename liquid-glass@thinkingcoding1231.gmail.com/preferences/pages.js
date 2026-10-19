@@ -6,6 +6,7 @@ import {sharedKeys, TEXT_KEYS, MENU_KEYS, POPUP_KEYS, MOTION, GROW_KEYS, QUALITY
 import {buildAdvancedPreferences} from './advanced.js';
 import {addBlurMyShellWarning} from './blur-my-shell.js';
 import {buildDesktopPage} from './desktop.js';
+import {addBackup} from './backup.js';
 
 function collectGroups(page, build) {
   const added = [];
@@ -42,6 +43,7 @@ export function buildPreferences(window, settings) {
     {title: 'Simple', patch: {'preferences-advanced': false}},
     {title: 'Advanced', patch: {'preferences-advanced': true}},
   ], '', false);
+  addBackup(appearance, controls, window);
   const glass = controls.group(appearance, 'Glass', 'One look for all effects. Existing differences stay until you change a control.');
   controls.number(glass, 'Blur', sharedKeys('blur-radius'), 0, 30, 1, '', {slider: true});
   controls.number(glass, 'Corners', [...sharedKeys('corner-radius')], 0, 200, 1, '', {slider: true});
@@ -52,7 +54,8 @@ export function buildPreferences(window, settings) {
   controls.choice(behavior, 'Animations', MOTION);
   controls.choice(behavior, 'Menus grow from their button', booleanChoices(GROW_KEYS),
     'Calendar and other top bar menus, while animations are on');
-  controls.choice(behavior, 'Automatic text contrast', booleanChoices(TEXT_KEYS));
+  controls.choice(behavior, 'Adaptive color', booleanChoices(TEXT_KEYS),
+    'Text and icons turn light or dark to stay readable on the glass');
   controls.choice(behavior, 'Match menu heights', booleanChoices([
     'menu-match-quick-settings-height', 'panel-menu-match-quick-settings-height',
   ]));
@@ -61,6 +64,7 @@ export function buildPreferences(window, settings) {
   controls.choice(surfaces, 'Top bar', TOP_BAR, 'The bar itself; menus are below', false);
   controls.toggle(surfaces, 'Dock', 'enable-dock-glass');
   controls.choice(surfaces, 'Menus', booleanChoices(MENU_KEYS), 'Calendar, quick settings, other top bar menus and desktop');
+
   controls.choice(surfaces, 'Popups', booleanChoices(POPUP_KEYS), 'Notifications and volume / brightness indicators');
 
   const rendering = controls.group(advanced, 'Rendering');

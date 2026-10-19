@@ -112,7 +112,7 @@ The effect can be enabled or disabled per UI element on the **Effects** page. In
 | **Top Bar** | The bar itself, as **one pill** across the screen or **three pills** behind its groups of buttons (activities, clock, status icons), chosen on the Effects page (Appearance → Top bar in the Advanced view). The space around the pills (**margin**) and between their edges and the buttons (**padding**) can be set per side in the Advanced view; the bar grows to make room, and maximized windows stay below it. Off by default. Supports **adaptive text coloring**. |
 | **Dash to Dock** | Glass behind the dock. Adds a bottom margin control so the dock can float above the screen edge. Works with the Dash to Dock / Ubuntu Dock extension. |
 | **Application Icons** | The icons in Dash to Dock (the Show Apps button too), in the launcher's results and in the overview's app grid, redrawn as glass plates under a one-color symbol, as in macOS 26 and iOS 26. See [Glass Icons](#glass-icons). Off by default. |
-| **Calendar & Other Top Bar Menus** | Glass behind the calendar (clock) menu and behind the menus of the other top bar indicators — the keyboard layout and accessibility menus, and the indicators other extensions add, including [ArcMenu](https://gitlab.com/arcmenu/ArcMenu)'s menu and its right-click menu. Each detected menu can be switched off on its own. Menus **grow out of their button**, after [liquid-dom](https://github.com/AndrewPrifer/liquid-dom)'s menu demo: the button's highlight drops out of the button and rounds off into a drop of glass, which is thrown out to where the menu will be — each time with a small push in a random downward direction — and swells into the menu, its items coming up through the glass, seen bent by its rim at first. Closing runs it back: the menu shrinks into a drop that rises into the button, widening into its highlight on the way, and fades once it has become the highlight. Off by default (Appearance → Behavior → "Menus grow from their button"). With that off, a **custom spring animation** (stiffness / damping / mass) scales the menu instead. Also supports **adaptive text coloring**. |
+| **Calendar & Other Top Bar Menus** | Glass behind the calendar (clock) menu and behind the menus of the other top bar indicators — the keyboard layout and accessibility menus, and the indicators other extensions add, including [ArcMenu](https://gitlab.com/arcmenu/ArcMenu)'s menu and its right-click menu. The calendar menu's cards (messages, events, world clocks) follow the light or dark shell theme. Each detected menu can be switched off on its own. Menus **grow out of their button**, after [liquid-dom](https://github.com/AndrewPrifer/liquid-dom)'s menu demo: the button's highlight drops out of the button and rounds off into a drop of glass, which is thrown out to where the menu will be — each time with a small push in a random downward direction — and swells into the menu, its items coming up through the glass, seen bent by its rim at first. Closing runs it back: the menu shrinks into a drop that rises into the button, widening into its highlight on the way, and fades once it has become the highlight. Off by default (Appearance → Behavior → "Menus grow from their button"). With that off, a **custom spring animation** (stiffness / damping / mass) scales the menu instead. Also supports **adaptive text coloring**. |
 | **Notifications** | Glass behind notification banners. Supports **adaptive text coloring** and a hide safety margin to avoid flicker while the banner is dismissed. |
 | **Quick Settings** | Draws the panel as a custom grid of glass cards, each mirroring a native quick setting, over one shared sheet of glass behind the grid, with a drop shadow on every card. Tapping a card that has more to it (Wi-Fi, Bluetooth, power mode, caffeine) opens a floating **submenu** of glass rows — network and device lists, switches and system actions. A **layout editor** (from the menu's edit button) reorders, resizes and hides cards and saves the layout. Supports spring animation and adaptive text coloring. |
 | **OSD** | Glass behind the on-screen displays (volume, brightness, and so on), with adaptive text coloring. |
@@ -161,6 +161,8 @@ Cards of glass on the desktop, stacked in a corner or the center of the primary 
 - **Up next** — the rest of today's events and tomorrow's, from the calendars the calendar menu shows. Click it to open GNOME Calendar.
 - **Now playing** — the track a music or video player is playing (any MPRIS player), with its cover art, previous, play/pause and next buttons, and five bars beside the title that follow the sound being played (an FFT of the default output, through GStreamer). GNOME shows its microphone indicator while the bars listen; they can be switched off in the preferences (**Sound bars**). Hidden while no player is running.
 
+Widgets that were moved one above the other stay a stack: when one grows, shrinks or is hidden (Now playing while no player runs), the ones below it follow instead of overlapping it or leaving a gap.
+
 While one is moved, dotted guides show where it lines up with the others and the clock (the same edge, or the same center line), with the middle of the screen, and where it sits as far from one item as that item is from the next; near such a place it snaps onto it. Their text takes the light or dark color set as preferred in the preferences for as long as that stays readable on the wallpaper behind it, so it does not keep flipping on a busy background.
 
 The widgets and the clock are hidden in the overview, together with the windows. With desktop icons ([Desktop Icons NG](https://gitlab.com/rastersoft/desktop-icons-ng)) they sit above the icons, so they can be clicked.
@@ -169,15 +171,17 @@ The widgets and the clock are hidden in the overview, together with the windows.
 
 A search field on glass in the middle of the screen, like Spotlight, opened with <kbd>Super</kbd> + <kbd>Alt</kbd> + <kbd>Space</kbd> (changeable in the preferences). It asks the same search providers as the overview, so it finds applications, settings, files, calculations and whatever else your installed apps provide, as far as they are enabled in Settings → Search. Use the arrow keys and <kbd>Enter</kbd>, or click a result; <kbd>Esc</kbd> or a click outside closes it.
 
+The width of the search field, and the height of the pinned items' page, can be set under **Desktop → Launcher**; on a small screen, for example a laptop at 200 % scaling, a narrower launcher keeps clear of the desktop widgets.
+
 Arithmetic such as `3*8`, `3*8=` or `1-5` is worked out by the launcher itself and shown first; <kbd>Enter</kbd> copies the result.
 
 Point at a result and a pin appears on its left: click it to pin the result (applications, files, settings and the like; not calculations). Pinned results keep a filled pin, come first when they match a search, and are listed on their own page, opened with <kbd>Ctrl</kbd> + <kbd>P</kbd>: applications in a grid, everything else in a list below, each with its pin to unpin it. The back button, <kbd>Esc</kbd> or <kbd>Ctrl</kbd> + <kbd>P</kbd> goes back to the search, as does typing. The glass changes to the larger page either by morphing, with the content seen deep in the glass on the way, or by easing with the content fading (**Desktop → Launcher → Change to pinned items**).
 
 ## Preferences
 
-- **Appearance** — shared blur, corners and tint; animations, automatic text contrast and matching menu heights.
-- **Effects** — choose where glass appears: top bar, dock, menus, popups, application icons and application windows.
-- **Desktop** — the glass clock, the desktop widgets and the launcher (its shortcut, and how it changes to its pinned items).
+- **Appearance** — shared blur, corners and tint; animations, adaptive color and matching menu heights; **Backup**, which exports every setting to a file and imports it again.
+- **Effects** — choose where glass appears: top bar, dock, menus, popups, application icons and application windows. The advanced view lists every surface on its own here, the top bar included.
+- **Desktop** — the glass clock, the desktop widgets and the launcher (its shortcut, width, the height of the pinned items and how it changes to them).
 - **Rendering** — rendering quality, refraction, edge lighting, shadows and diagnostics.
 
 Opening the window preserves your configuration. **Custom** means your existing
@@ -297,6 +301,7 @@ A significant part of this codebase was written with the help of AI coding assis
 - [x] Glass application icons in the app grid
 - [x] Drop shadow on every Quick Settings grid card
 - [x] Pin launcher results, with a page of pinned items, and work out arithmetic in the launcher
+- [x] Export and import the settings, set the launcher's size, and keep desktop widgets in a stack when their content changes
 
 ### Next
 - [ ] Publish to extensions.gnome.org (not approved yet)

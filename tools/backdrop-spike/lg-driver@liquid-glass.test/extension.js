@@ -22,9 +22,13 @@
 //              widgets, the glass clock and the launcher, on a photo wallpaper
 //              ($LG_DRV_WALLPAPER); LG_DRV_FEATURES picks parts (comma
 //              separated: morph, topbar, widgets, clock, launcher; default all;
-//              also morphtrace, qssub, clockshot, media, guides,
-//              launcherpointer,
-//              launchercolor, iconstyle; iconstyle needs LG_DTD_DIR)
+//              also morphtrace, qssub, clockshot, media, guides, launcherpointer,
+//              launchercolor, iconstyle, iconglass; both need LG_DTD_DIR);
+//              also scale (the calendar and the launcher on a small logical screen:
+//              run-glass.sh with LG_SPIKE_MONITOR=2256x1504 and
+//              LG_MONITORS_XML=tools/backdrop-spike/monitors-200.xml; LG_DRV_LIGHT=1 for the
+//              light shell theme) and widgetcolors (the weather card's text colours after rebuilds);
+//              $LG_DRV_SETTINGS_DUMP (a dconf dump) and $LG_DRV_ICON_THEME set up the session first
 //   bench      global._lgBench.run() (run-glass.sh with LG_BENCH=1); LG_DRV_BENCH
 //              picks scenarios (comma separated, default all), LG_DRV_BENCH_SECONDS
 //              the seconds per scenario (default 3), LG_DRV_BENCH_AB=1 adds a run without UI glass
@@ -46,6 +50,7 @@ import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import * as QuickSettings from 'resource:///org/gnome/shell/ui/quickSettings.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const OUT_DIR = GLib.getenv('LG_SPIKE_OUT') ?? GLib.get_tmp_dir();
@@ -2445,6 +2450,93 @@ export default class LgDriver extends Extension {
     }
     if (parts.includes('guides'))
       await this._editGuides(settings, m);
+    if (parts.includes('widgetcolors')) {
+      // The text colours of the weather card after its content was rebuilt
+      // again and again: every label should have the same colour.
+      settings.set_boolean('output-logs', true);
+      settings.set_value('weather-place', new GLib.Variant('(sdd)', ['Hua Hin', 12.57, 99.96]));
+      settings.set_boolean('enable-desktop-widgets', true);
+      await sleep(7000);
+      const weather = findActor(global.window_group, 'liquid-glass-desktop-weather');
+      const colours = () => [...new Set(findActors(weather, a => a instanceof St.Label || a instanceof St.Icon)
+        .map(a => a.get_theme_node().get_foreground_color().to_string()))].join(' ');
+      log(`widgetcolors: first ${colours()}`);
+      for (let i = 0; i < Number(GLib.getenv('LG_DRV_ROUNDS') ?? 10); i++) {
+        settings.set_string('weather-temperature-unit', i % 2 ? 'celsius' : 'fahrenheit');
+        await sleep(2500 + (i * 137) % 700);
+        log(`widgetcolors: round ${i} ${colours()}`);
+      }
+      await shot('widgetcolors', [m.x, m.y, m.width, m.height]);
+    }
+    if (parts.includes('scale')) {
+      // The calendar and Quick Settings on a small logical screen (a laptop at
+      // 200 %, with run-glass.sh's LG_MONITORS_XML): do they fit, and how do
+      // the slider rows and the cards look. The headless shell has no audio or
+      // brightness device, so the three slider rows and some toggles are added.
+      settings.set_boolean('output-logs', true);
+      // LG_DRV_LIGHT=1: the light shell theme.
+      if (GLib.getenv('LG_DRV_LIGHT') === '1') {
+        new Gio.Settings({schema_id: 'org.gnome.desktop.interface'}).set_string('color-scheme', 'prefer-light');
+        await sleep(2000);
+      }
+      // LG_DRV_QS_BASE: how much of each toggle's own colour the glass keeps.
+      if (GLib.getenv('LG_DRV_QS_BASE')) settings.set_double('quick-settings-toggle-tint-strength', Number(GLib.getenv('LG_DRV_QS_BASE')));
+      this._cameraAway = true;
+      const dateMenu = Main.panel.statusArea.dateMenu.menu;
+      const qs = Main.panel.statusArea.quickSettings.menu;
+      const sliders = ['audio-volume-high-symbolic', 'audio-input-microphone-symbolic', 'display-brightness-symbolic']
+        .map(iconName => new QuickSettings.QuickSlider({iconName}));
+      const toggles = ['Wired', 'Bluetooth', 'Power Mode', 'Night Light', 'Keyboard', 'Airplane Mode', 'Caffeine', 'Auto Brightness']
+        .map((title, i) => new QuickSettings.QuickToggle({title, iconName: 'network-wired-symbolic', checked: i % 2 === 0}));
+      for (const slider of sliders) qs.addItem(slider, 2);
+      for (const toggle of toggles) qs.addItem(toggle);
+      const sliderRows = () => sliders.map(a => `${Math.round(a.get_height())}`).join(' ');
+      for (let i = 0; i < 3; i++)
+        Main.notify(`Driver ${i}`, 'A notification for the calendar menu');
+      await sleep(1500);
+      dateMenu.open(false);
+      await sleep(2500);
+      await this._shots('scale-calendar', [m.x, m.y, m.width, m.height], 'menu');
+      dateMenu.close(false);
+      await sleep(800);
+      for (const mode of [0, 1]) {
+        settings.set_int('quick-settings-apply-to', mode);
+        await sleep(1500);
+        qs.open(false);
+        await sleep(2500);
+        const [bx, by] = qs.box.get_transformed_position();
+        const [bw, bh] = qs.box.get_transformed_size();
+        log(`scale: quick settings mode=${mode} box=${[bx, by, bw, bh].map(Math.round)} ` +
+          `monitor=${m.width}x${m.height} bottom overflow=${Math.round(by + bh - m.height)} slider heights=${sliderRows()}`);
+        qs.close(false);
+        await sleep(800);
+        await this._menuShot(`scale-qs-${mode}`, qs, mode === 0 ? 'quick-settings' : 'quick-settings-toggles');
+      }
+      settings.set_int('quick-settings-apply-to', 0);
+      this._cameraAway = false;
+      await sleep(1000);
+      // The launcher against the desktop widgets (LG_DRV_LAUNCHER_WIDTH sets its width).
+      if (GLib.getenv('LG_DRV_LAUNCHER_WIDTH')) settings.set_int('launcher-width', Number(GLib.getenv('LG_DRV_LAUNCHER_WIDTH')));
+      settings.set_boolean('enable-launcher', true);
+      settings.set_boolean('enable-desktop-widgets', true);
+      await sleep(5000);
+      const {Launcher} = await this._lgModule('launcher/launcher.js');
+      Launcher.instance?.open();
+      await sleep(1500);
+      const rect = a => a.get_transformed_extents();
+      const panel = findActors(global.stage, a => a.has_style_class_name?.('liquid-glass-launcher'))[0];
+      const cards = findActors(global.window_group, a => (a.get_name() ?? '').startsWith('liquid-glass-desktop-') && a.mapped);
+      const overlaps = cards.filter(c => {
+        const [p, q] = [rect(panel), rect(c)];
+        return p.origin.x < q.origin.x + q.size.width && q.origin.x < p.origin.x + p.size.width &&
+          p.origin.y < q.origin.y + q.size.height && q.origin.y < p.origin.y + p.size.height;
+      }).map(c => c.get_name());
+      log(`scale: launcher at ${[panel.x, panel.y, panel.width, panel.height].map(Math.round)} on ${m.width}x${m.height}, ` +
+        `overlapping widgets: ${overlaps.join(',') || 'none'}`);
+      await this._shots('scale-launcher', [m.x, m.y, m.width, m.height], 'launcher');
+      Launcher.instance?.close();
+      await sleep(800);
+    }
     if (parts.includes('launcher')) {
       settings.set_boolean('enable-launcher', true);
       await sleep(1000);

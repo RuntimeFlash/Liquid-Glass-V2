@@ -27,6 +27,10 @@ const TILT_DB_PER_OCTAVE = 4.5;
 const CEILING_FALL_DB = 8;
 const RANGE_DB = 42;
 const MIN_CEILING_DB = -70;
+// A pipeline that fails, or goes quiet (the sound server restarted, the default output changed), is
+// started again after this many seconds; the check for a silent one runs this often.
+const RETRY_S = 2;
+const WATCHDOG_S = 3;
 
 /**
  * Listens while started, and calls `onLevels` with one level from 0 to 1 per
@@ -45,6 +49,11 @@ export class AudioSpectrum {
     _tilt;
     // GStreamer lacks an element the pipeline needs; not tried again.
     _unavailable = false;
+    // Between start() and stop(), whether or not a pipeline is running right now.
+    _wanted = false;
+    _retryId = 0;
+    _watchdogId = 0;
+    _lastMessageUs = 0;
 
     constructor(_logger, _onLevels) {
         this._logger = _logger;
@@ -63,6 +72,16 @@ export class AudioSpectrum {
     }
 
     start() {
+        this._wanted = true;
+        this._begin();
+    }
+
+    stop() {
+        this._wanted = false;
+        this._end();
+    }
+
+    _begin() {
         if (this._pipeline || this._unavailable)
             return;
         if (!Gst) {
@@ -88,10 +107,37 @@ export class AudioSpectrum {
         this._bus.add_signal_watch();
         this._busId = this._bus.connect('message', (_bus, message) => this._message(message));
         this._lastUs = 0;
+        this._lastMessageUs = GLib.get_monotonic_time();
         pipeline.set_state(Gst.State.PLAYING);
+        if (this._watchdogId)
+            GLib.Source.remove(this._watchdogId);
+        this._watchdogId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, WATCHDOG_S, () => {
+            if (GLib.get_monotonic_time() - this._lastMessageUs > WATCHDOG_S * 1e6)
+                this._restart();
+            return GLib.SOURCE_CONTINUE;
+        });
     }
 
-    stop() {
+    // Stops the pipeline, and starts it again shortly if it is still wanted.
+    _restart() {
+        this._end();
+        if (this._retryId)
+            GLib.Source.remove(this._retryId);
+        this._retryId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, RETRY_S, () => {
+            this._retryId = 0;
+            if (this._wanted)
+                this._begin();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _end() {
+        if (this._watchdogId)
+            GLib.Source.remove(this._watchdogId);
+        this._watchdogId = 0;
+        if (this._retryId)
+            GLib.Source.remove(this._retryId);
+        this._retryId = 0;
         if (!this._pipeline)
             return;
         this._bus.disconnect(this._busId);
@@ -105,12 +151,13 @@ export class AudioSpectrum {
     _message(message) {
         if (message.type === Gst.MessageType.ERROR) {
             const [error] = message.parse_error();
-            this._logger.log(`[Liquid Glass] Stopped listening for the media card: ${error?.message}`);
-            this.stop();
+            this._logger.log(`[Liquid Glass] Lost the sound for the media card, trying again: ${error?.message}`);
+            this._restart();
             return;
         }
         if (message.type !== Gst.MessageType.ELEMENT)
             return;
+        this._lastMessageUs = GLib.get_monotonic_time();
         const structure = message.get_structure();
         if (structure?.get_name() !== 'spectrum')
             return;

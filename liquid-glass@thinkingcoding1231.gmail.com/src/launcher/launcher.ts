@@ -24,7 +24,10 @@ import type { IconStyler } from '../iconStyle/iconStyler.js';
 import { evaluate, formatNumber } from './calculator.js';
 import { type Pin, PinStore } from './pins.js';
 
-const WIDTH = 680;
+// The pinned items' page is this much wider than the search.
+const PINNED_EXTRA_WIDTH = 80;
+// The least room left at either side of the panel.
+const SIDE_MARGIN = 16;
 // The search field's top, as a fraction of the monitor's height.
 const TOP = 0.2;
 const MAX_RESULTS = 8;
@@ -42,9 +45,6 @@ const SHAPE_MS = 220;
 // Frames asked for past the glass's tween, and after the panel changes size.
 const TICK_MS = 50;
 const HINT_OPACITY = 178;
-// The pinned items' page is a little larger than the search, with applications in a grid of square tiles.
-const PINNED_WIDTH = 760;
-const PINNED_MIN_HEIGHT = 470;
 // The pinned page's content scrolls past this share of the monitor's height.
 const PINNED_MAX_HEIGHT = 0.7;
 const GRID_COLUMNS = 5;
@@ -185,8 +185,9 @@ export class Launcher {
     glass.setShadowMaxRadius(SHADOW_MARGIN - 10);
     root.add_child(glass);
 
-    const panel = new St.BoxLayout({ style_class: 'liquid-glass-launcher', reactive: true, can_focus: true, width: WIDTH,
-      x: Math.round((monitor.width - WIDTH) / 2), y: Math.round(monitor.height * TOP), ...verticalBoxParams() } as any);
+    const width = this._panelWidth(false, monitor.width);
+    const panel = new St.BoxLayout({ style_class: 'liquid-glass-launcher', reactive: true, can_focus: true, width,
+      x: Math.round((monitor.width - width) / 2), y: Math.round(monitor.height * TOP), ...verticalBoxParams() } as any);
     // Keys on the pinned page, where the panel has the focus.
     panel.connect('key-press-event', (_actor: Clutter.Actor, event: Clutter.Event) => this._onPinnedKey(event));
     // A click outside the field closes it. Presses inside must not be stopped: from GNOME 49 a button clicks
@@ -219,7 +220,7 @@ export class Launcher {
     const pinnedBox = new St.ScrollView({ style_class: 'lg-launcher-pinned', x_expand: true, visible: false,
       hscrollbar_policy: St.PolicyType.NEVER, vscrollbar_policy: St.PolicyType.AUTOMATIC, overlay_scrollbars: true,
       // On the scroll view, as St.BoxLayout ignores min-height; inside the panel's padding.
-      style: `min-height: ${PINNED_MIN_HEIGHT - PANEL_PADDING * 2}px; max-height: ${Math.round(monitor.height * PINNED_MAX_HEIGHT)}px;` });
+      style: this._pinnedStyle(monitor.height) });
     panel.add_child(searchBox);
     panel.add_child(pinnedBox);
     root.add_child(panel);
@@ -242,6 +243,8 @@ export class Launcher {
     this._applyMaterial();
     this._materialIds = (['tint-color', 'tint-strength', 'blur-radius', 'corner-radius', 'brightness', 'contrast',
       'saturation']).map(key => this._settings.connect(`changed::launcher-${key}`, () => this._applyMaterial()));
+    for (const key of ['width', 'pinned-height'])
+      this._materialIds.push(this._settings.connect(`changed::launcher-${key}`, () => this._applySize()));
 
     entry.clutter_text.connect('text-changed', () => this._queueSearch());
     entry.clutter_text.connect('key-press-event', (_a: Clutter.Actor, event: Clutter.Event) => this._onKey(event));
@@ -324,6 +327,24 @@ export class Launcher {
       this._panel!.add_effect(this._lens);
     }
     this._keepTicking();
+  }
+
+  // The search's width is a setting; the pinned page is wider. Neither outgrows a small screen.
+  private _panelWidth(pinned: boolean, monitorWidth: number): number {
+    const width = this._settings.get_int('launcher-width') + (pinned ? PINNED_EXTRA_WIDTH : 0);
+    return Math.min(width, monitorWidth - SIDE_MARGIN * 2);
+  }
+
+  private _pinnedStyle(monitorHeight: number): string {
+    const max = Math.round(monitorHeight * PINNED_MAX_HEIGHT);
+    const min = Math.min(this._settings.get_int('launcher-pinned-height') - PANEL_PADDING * 2, max);
+    return `min-height: ${min}px; max-height: ${max}px;`;
+  }
+
+  private _applySize(): void {
+    this._pinnedBox!.set_style(this._pinnedStyle(this._root!.height));
+    this._setView(this._view);
+    this._coloredFor = '';
   }
 
   private _applyMaterial(): void {
@@ -436,7 +457,7 @@ export class Launcher {
     const root = this._root!;
     this._view = view;
     const pinned = view === 'pinned';
-    const width = pinned ? PINNED_WIDTH : WIDTH;
+    const width = this._panelWidth(pinned, root.width);
     panel.set_width(width);
     panel.x = Math.round((root.width - width) / 2);
     this._searchBox!.visible = !pinned;
@@ -788,7 +809,7 @@ export class Launcher {
     };
     if (apps.length) {
       page.add_child(new St.Label({ text: 'Applications', style_class: 'lg-launcher-section' }));
-      const tile = Math.floor((PINNED_WIDTH - PANEL_PADDING * 2 - GRID_SPACING * (GRID_COLUMNS - 1)) / GRID_COLUMNS);
+      const tile = Math.floor((this._panelWidth(true, this._root!.width) - PANEL_PADDING * 2 - GRID_SPACING * (GRID_COLUMNS - 1)) / GRID_COLUMNS);
       let line: St.BoxLayout | null = null;
       apps.forEach((pin, i) => {
         if (i % GRID_COLUMNS === 0) {
@@ -848,7 +869,7 @@ export class Launcher {
   private _colorText(): void {
     const root = this._root!;
     const panel = this._panel!;
-    const width = this._view === 'pinned' ? PINNED_WIDTH : WIDTH;
+    const width = this._panelWidth(this._view === 'pinned', root.width);
     const [, height] = panel.get_preferred_height(width);
     const rect = { x: root.x + panel.x, y: root.y + panel.y, width, height: Math.ceil(height) };
     const key = `${rect.y},${rect.height}`;
