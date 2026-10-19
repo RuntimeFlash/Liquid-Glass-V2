@@ -325,7 +325,7 @@ export class Launcher {
   /** The pinned items' page, or the search again. */
   showView(view: View): void {
     if (!this._root || view === (this._switch?.view ?? this._view)) return;
-    const morph = this._settings.get_string('launcher-pinned-transition') !== 'tween';
+    const morph = this._settings.get_string('launcher-pinned-transition') === 'morph';
     const sw = this._switch;
     if (sw) {
       // Turned back midway: the content goes again from as far as it had come, or comes back from as far as

@@ -125,7 +125,7 @@ settings.set_string('icon-style-mode', 'clear');
 find('Glass tuning').emit('activated');
 const tuning = window.visible_dialog;
 const tuningRows = [...walk(tuning)].filter(widget => widget instanceof Adw.SpinRow);
-if (tuningRows.length !== 4) throw Error(`Clear has ${tuningRows.length} tuning rows`);
+if (tuningRows.length !== 5) throw Error(`Clear has ${tuningRows.length} tuning rows`);
 tuningRows.find(row => row.title === 'Symbol: shadow under it').value = 0.7;
 if (settings.get_value('icon-style-tuning').deep_unpack().clearSymbolShadow !== 0.7) throw Error('Tuning did not store its value');
 tuning.close();

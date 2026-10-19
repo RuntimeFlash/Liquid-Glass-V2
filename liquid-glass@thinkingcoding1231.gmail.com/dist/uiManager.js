@@ -1385,7 +1385,7 @@ export class UIManager {
             m.motion = new MenuMorphMotion(m.opening, m.button, menu, this._cornerRadius * this._menuScale, m.from, m.velocities);
         }
         else {
-            m.motion.retarget(m.button, menu, this._cornerRadius);
+            m.motion.retarget(m.button, menu, this._cornerRadius * this._menuScale);
         }
         const now = GLib.get_monotonic_time();
         const frame = m.motion.step(m.lastUs ? (now - m.lastUs) / 1e6 : 1 / 60, m.speed);

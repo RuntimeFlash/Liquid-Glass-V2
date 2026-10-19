@@ -40,8 +40,9 @@ export const ICON_TUNING = [
     { key: 'monoInnerAlpha', title: 'Plates: opacity', looks: ['mono'], min: 0, max: 1, value: 0.92 },
     { key: 'monoSymbol', title: 'Symbol: lightness', looks: ['mono'], min: 0, max: 1, value: 1 },
     { key: 'monoRim', title: 'Rim brightness', looks: ['mono'], min: 0, max: 1, value: 0.55 },
-    { key: 'clearGlassAlpha', title: 'Glass: white frost', looks: ['clear'], min: 0, max: 1, value: 0.1 },
-    { key: 'clearInnerAlpha', title: 'Plates: white frost', looks: ['clear'], min: 0, max: 1, value: 0.08 },
+    { key: 'clearGlassAlpha', title: 'Glass: white frost', looks: ['clear'], min: 0, max: 1, value: 0.02 },
+    { key: 'clearInnerAlpha', title: 'Plates: white frost', looks: ['clear'], min: 0, max: 1, value: 0.02 },
+    { key: 'clearRimScale', title: 'Rim: width against the glass\'s', looks: ['clear'], min: 1, max: 4, value: 1.6 },
     { key: 'clearToneSpread', title: 'Plates in different colors: how far apart', looks: ['clear'], min: 0, max: 2,
         value: 1 },
     { key: 'clearSymbolShadow', title: 'Symbol: shadow under it', looks: ['clear'], min: 0, max: 1, value: 0.4 },
@@ -69,12 +70,13 @@ export function iconStyleColors(mode, tint, strength, symbolOpacity, variant = '
         // Barely frosted, so that the white symbol stands apart from the plates. The frost is light added, which keeps
         // the colours of what is behind.
         return { ...CLEAR_WITHOUT_BACKDROP, toneSpread: v('clearToneSpread'), additive: 1, symbolShadow: v('clearSymbolShadow'),
+            rimScale: v('clearRimScale'),
             plate: [1, 1, 1, v('clearGlassAlpha')], inner: [1, 1, 1, v('clearInnerAlpha')],
             symbol: [1, 1, 1, symbolOpacity], symbolInner: [1, 1, 1, symbolOpacity], tint: [0.75, 0.75, 0.78] };
     }
     const look = mode === 'tinted' ? variant : mode;
     const shared = { rimWidth: v(`${look}RimWidth`), rimBase: v(`${look}RimBase`), sheen: v(`${look}Sheen`),
-        toneSpread: v(`${look}ToneSpread`), additive: 0, edgeShade: 0, symbolShadow: 0 };
+        toneSpread: v(`${look}ToneSpread`), additive: 0, edgeShade: 0, symbolShadow: 0, rimScale: 1 };
     if (mode === 'mono') {
         return { ...shared, plate: [...glass(v('monoGlass')), 1], inner: [...glass(v('monoInner')), v('monoInnerAlpha')],
             symbol: [...glass(v('monoSymbol')), symbolOpacity], symbolInner: [...glass(v('monoGlass')), symbolOpacity],
@@ -100,7 +102,7 @@ export function iconStyleColors(mode, tint, strength, symbolOpacity, variant = '
 export function iconStyleUniforms(colors) {
     const out = [['rim_a', colors.rim], ['rim_width', colors.rimWidth], ['rim_base', colors.rimBase],
         ['sheen', colors.sheen], ['tone_spread', colors.toneSpread], ['additive', colors.additive],
-        ['edge_shade', colors.edgeShade], ['symbol_shadow', colors.symbolShadow]];
+        ['edge_shade', colors.edgeShade], ['symbol_shadow', colors.symbolShadow], ['rim_scale', colors.rimScale]];
     for (const name of ['plate', 'inner', 'symbol', 'symbolInner']) {
         const uniform = name === 'symbolInner' ? 'symbol_inner' : name;
         colors[name].forEach((c, i) => out.push([`${uniform}_${'rgba'[i]}`, c]));

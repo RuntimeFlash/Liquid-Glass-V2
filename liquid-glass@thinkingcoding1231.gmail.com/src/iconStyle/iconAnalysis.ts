@@ -37,6 +37,8 @@ export interface PlateShape {
   ripple: Ripple | null;
   // How well the shape covers the plate (intersection over union).
   fit: number;
+  // A rounded rectangle's corners as superellipses of this exponent; circular arcs (2) when not given.
+  corner?: number;
 }
 
 export interface Plate {
@@ -224,7 +226,7 @@ export function shapeDistance(shape: PlateShape, x: number, y: number): number {
   if (shape.kind === 'roundrect') {
     const r = Math.min(shape.radius, shape.rx, shape.ry);
     const qx = Math.abs(dx) - shape.rx + r, qy = Math.abs(dy) - shape.ry + r;
-    d = Math.min(Math.max(qx, qy), 0) + Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) - r;
+    d = Math.min(Math.max(qx, qy), 0) + cornerLength(Math.max(qx, 0), Math.max(qy, 0), r, shape.corner ?? 2) - r;
   } else {
     const n = shape.exponent;
     const f = (Math.abs(dx / shape.rx) ** n + Math.abs(dy / shape.ry) ** n) ** (1 / n);
@@ -236,6 +238,18 @@ export function shapeDistance(shape: PlateShape, x: number, y: number): number {
   if (len < 1e-6) return d;
   const base = len - d;
   return len - base * rippleFactor(shape.ripple, Math.atan2(dy, dx));
+}
+
+// The distance into a corner of radius r at (px, py) from its centre, for a superellipse corner of exponent n: its
+// norm over the length of its gradient, which fades in from the centre, where the gradient has no direction.
+function cornerLength(px: number, py: number, r: number, n: number): number {
+  if (n === 2) return Math.hypot(px, py);
+  const m = Math.max(px, py);
+  if (m <= 0) return 0;
+  const len = m * ((px / m) ** n + (py / m) ** n) ** (1 / n);
+  const grad = Math.hypot((px / len) ** (n - 1), (py / len) ** (n - 1));
+  const gradLen = 1 + (grad - 1) * Math.min(len / Math.max(r, 1e-3), 1);
+  return r + (len - r) / Math.max(gradLen, 0.5);
 }
 
 function rippleFactor(ripple: Ripple, angle: number): number {

@@ -161,7 +161,7 @@ export function shapeDistance(shape, x, y) {
     if (shape.kind === 'roundrect') {
         const r = Math.min(shape.radius, shape.rx, shape.ry);
         const qx = Math.abs(dx) - shape.rx + r, qy = Math.abs(dy) - shape.ry + r;
-        d = Math.min(Math.max(qx, qy), 0) + Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) - r;
+        d = Math.min(Math.max(qx, qy), 0) + cornerLength(Math.max(qx, 0), Math.max(qy, 0), r, shape.corner ?? 2) - r;
     }
     else {
         const n = shape.exponent;
@@ -176,6 +176,20 @@ export function shapeDistance(shape, x, y) {
         return d;
     const base = len - d;
     return len - base * rippleFactor(shape.ripple, Math.atan2(dy, dx));
+}
+
+// The distance into a corner of radius r at (px, py) from its centre, for a superellipse corner of exponent n: its
+// norm over the length of its gradient, which fades in from the centre, where the gradient has no direction.
+function cornerLength(px, py, r, n) {
+    if (n === 2)
+        return Math.hypot(px, py);
+    const m = Math.max(px, py);
+    if (m <= 0)
+        return 0;
+    const len = m * ((px / m) ** n + (py / m) ** n) ** (1 / n);
+    const grad = Math.hypot((px / len) ** (n - 1), (py / len) ** (n - 1));
+    const gradLen = 1 + (grad - 1) * Math.min(len / Math.max(r, 1e-3), 1);
+    return r + (len - r) / Math.max(gradLen, 0.5);
 }
 
 function rippleFactor(ripple, angle) {

@@ -47,6 +47,8 @@ uniform float additive;
 uniform float edge_shade;
 // How dark the soft shadow under the symbol is, which keeps a light symbol readable on a light backdrop.
 uniform float symbol_shadow;
+// The glass rim's width as a multiple of the glass's (LG_ICON_GLASS).
+uniform float rim_scale;
 uniform float tint_r;
 uniform float tint_g;
 uniform float tint_b;
@@ -263,7 +265,8 @@ vec3 glassOver(vec3 under, Lens l, float frost) {
     base *= 1.0 - aoMask * glass_ao_intensity * mix(1.0, 1.0 - lightMask, glass_surface_light_enabled);
     base += (1.0 - base) * frost;
 
-    float edgeBand = (1.0 - smoothstep(0.0, max(glass_rim_width, 0.001), abs(l.d))) * step(0.0005, glass_rim_width);
+    float rimWidth = glass_rim_width * rim_scale;
+    float edgeBand = (1.0 - smoothstep(0.0, max(rimWidth, 0.001), abs(l.d))) * step(0.0005, rimWidth);
     float rimFresnel = pow(max(1.0 - max(n.z, 0.0), 0.0), max(glass_rim_power, 0.001));
     float rim = mix(pow(edgeBand, 0.85), rimFresnel, 0.55) * edgeBand * lightMask * glass_rim_intensity *
         glass_rim_light_color_intensity;

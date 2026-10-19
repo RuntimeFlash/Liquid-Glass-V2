@@ -144,17 +144,17 @@ export const IconBackdrop = GObject.registerClass(
     }
 
     // The rect to copy, [x0, y0, x1, y1] on the stage: around the icons, inside the host, which leaves out the
-    // icons of an app grid's other pages.
+    // icons of an app grid's other pages. Inside the host, a redraw of the host redraws all of it.
     private _rect(): number[] | null {
       const r = this._params.rect();
       const box = this._host?.get_transformed_extents();
       if (!r || !box) return null;
-      const x0 = Math.floor(Math.max(r[0], box.get_x()) - MARGIN);
-      const y0 = Math.floor(Math.max(r[1], box.get_y()) - MARGIN);
-      const x1 = Math.min(r[2], box.get_x() + box.get_width()) + MARGIN;
-      const y1 = Math.min(r[3], box.get_y() + box.get_height()) + MARGIN;
-      if (!(x1 - x0 > 2 * MARGIN) || !(y1 - y0 > 2 * MARGIN)) return null;
-      return [x0, y0, x0 + Math.ceil((x1 - x0) / QUANTUM) * QUANTUM, y0 + Math.ceil((y1 - y0) / QUANTUM) * QUANTUM];
+      const [bx0, by0] = [Math.floor(box.get_x()), Math.floor(box.get_y())];
+      const [bx1, by1] = [Math.ceil(box.get_x() + box.get_width()), Math.ceil(box.get_y() + box.get_height())];
+      const x0 = Math.max(Math.floor(r[0] - MARGIN), bx0), y0 = Math.max(Math.floor(r[1] - MARGIN), by0);
+      const x1 = Math.min(x0 + Math.ceil((r[2] + MARGIN - x0) / QUANTUM) * QUANTUM, bx1);
+      const y1 = Math.min(y0 + Math.ceil((r[3] + MARGIN - y0) / QUANTUM) * QUANTUM, by1);
+      return x1 - x0 >= 1 && y1 - y0 >= 1 ? [x0, y0, x1, y1] : null;
     }
 
     // Before every frame: the relays follow what is behind the icons, and the area is redrawn whole when it moves,
@@ -185,8 +185,8 @@ export const IconBackdrop = GObject.registerClass(
       this._renderer.prepare(ctx);
       const serial = this._copier.lastCopy?.serial;
       const { copy, missed } = this._copier.take(host, node, paintContext, rect);
-      // Nothing to draw with yet; the next frame redraws the whole area.
-      if (missed) this._relays?.redrawArea();
+      // Nothing to draw with yet; the next frame redraws the whole area. The relays may not be shown yet.
+      if (missed) host.queue_redraw();
       if (copy && copy.serial !== serial) this._params.copied();
       const blur = this._renderer.blur;
       if (!copy?.rect || blur.passCount <= 0) return true;
