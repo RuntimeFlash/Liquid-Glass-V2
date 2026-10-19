@@ -2961,8 +2961,10 @@ export class QuickSettingsManager {
         this.animActor.remove_all_transitions();
         this._stampActor?.remove_all_transitions?.();
         this.animActor.set_pivot_point(0, 0);
-        if (open)
+        if (open) {
             this.animActor.opacity = 0;
+            this._cardLastGoodRect.clear();
+        }
         try {
             glass.setMultiRegionMode(false);
             glass.setCornerRadius(this._cornerRadius || QS_DEFAULT_CORNER_RADIUS);
@@ -2976,6 +2978,15 @@ export class QuickSettingsManager {
                 this._applyClipTargetsFor(this._stampActor ?? this.targetActor);
             }
             catch (e) { }
+        }
+        // Put the glass where the motion starts on this very frame, so the switch
+        // from card regions to one body never leaves a frame without glass.
+        const startBody = open ? button : this._morphMenuBodyRect();
+        if (startBody) {
+            this._placeMorph({
+                body: startBody, bodyRadius: open ? button[3] / 2 : this._cornerRadius || QS_DEFAULT_CORNER_RADIUS,
+                contentScale: 1, contentOpacity: open ? 0 : 1, lens: 0, glassOpacity: 1, soften: 0, done: false,
+            });
         }
         this._originProjection = null;
         this._stopCardBackingSync();
