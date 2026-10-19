@@ -1142,6 +1142,16 @@
       <summary>Launcher width</summary>
       <description>Width of the search field and its results, in logical pixels. The panel never grows wider than the screen.</description>
     </key>
+    <key name="launcher-spring-response" type="d">
+      <default>0.42</default>
+      <summary>Spring response</summary>
+      <description>How fast the springs respond to changes in the menu's size.</description>
+    </key>
+    <key name="launcher-spring-damping-fraction" type="d">
+      <default>0.72</default>
+      <summary>Spring damping fraction</summary>
+      <description>How much the springs damp when they reach their target.</description>
+    </key>
     <key name="launcher-pinned-height" type="i">
       <range min="240" max="1200"/>
       <default>470</default>

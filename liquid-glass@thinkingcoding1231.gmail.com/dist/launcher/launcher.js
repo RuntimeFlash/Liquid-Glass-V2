@@ -456,8 +456,10 @@ export class Launcher {
                 this._setView(sw.view);
                 sw.phase = 'in';
                 sw.startUs = now;
+                const springResponse = this._settings.get_double('launcher-spring-response');
+                const springDampingFraction = this._settings.get_double('launcher-spring-damping-fraction');
                 if (sw.morph)
-                    this._spring = new RectSpring(rect);
+                    this._spring = new RectSpring(rect, springResponse, springDampingFraction);
             }
         }
         else {

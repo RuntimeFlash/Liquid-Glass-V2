@@ -5,7 +5,7 @@ import Gtk from 'gi://Gtk';
 import Pango from 'gi://Pango';
 import Soup from 'gi://Soup?version=3.0';
 
-import {BUNDLED_FAMILIES} from '../dist/desktop/bundledFonts.js';
+import { BUNDLED_FAMILIES } from '../dist/desktop/bundledFonts.js';
 
 const GEOCODING = 'https://geocoding-api.open-meteo.com/v1/search';
 const USER_AGENT = 'Liquid Glass GNOME Shell extension (https://github.com/ryohsuke1231/liquid-glass)';
@@ -40,8 +40,10 @@ const movedPositions = settings => jsonSetting(settings, 'desktop-item-positions
 // their own from their menu, are reported; picking a place puts them back.
 function placeRow(group, controls, title, key, id) {
   const settings = controls.settings;
-  const row = new Adw.ComboRow({title,
-    model: Gtk.StringList.new([...PLACES.map(([, name]) => name), id ? 'Where it was moved' : 'Where each was put'])});
+  const row = new Adw.ComboRow({
+    title,
+    model: Gtk.StringList.new([...PLACES.map(([, name]) => name), id ? 'Where it was moved' : 'Where each was put'])
+  });
   row.list_factory = controls.readoutListFactory(row, PLACES.length);
   group.add(row);
   let syncing = false;
@@ -65,8 +67,10 @@ function placeRow(group, controls, title, key, id) {
     for (const item of Object.keys(positions)) {
       if (id ? item === id : item !== 'clock') delete positions[item];
     }
-    controls.write({[key]: PLACES[row.selected][0], 'desktop-item-positions': JSON.stringify(positions),
-      ...id ? {} : {'desktop-widget-anchors': '{}'}});
+    controls.write({
+      [key]: PLACES[row.selected][0], 'desktop-item-positions': JSON.stringify(positions),
+      ...id ? {} : { 'desktop-widget-anchors': '{}' }
+    });
   });
   controls.watch([key, 'desktop-item-positions', 'desktop-widget-anchors'], refresh);
   return row;
@@ -86,12 +90,16 @@ function weightIndex(description, family) {
 function fontRows(group, controls) {
   const settings = controls.settings;
   const families = Object.keys(BUNDLED_FAMILIES);
-  const row = new Adw.ComboRow({title: 'Font',
-    model: Gtk.StringList.new([...families, 'Interface font', 'Installed font'])});
-  const button = new Gtk.FontDialogButton({valign: Gtk.Align.CENTER, level: Gtk.FontLevel.FACE,
-    dialog: new Gtk.FontDialog({title: 'Clock Font'})});
+  const row = new Adw.ComboRow({
+    title: 'Font',
+    model: Gtk.StringList.new([...families, 'Interface font', 'Installed font'])
+  });
+  const button = new Gtk.FontDialogButton({
+    valign: Gtk.Align.CENTER, level: Gtk.FontLevel.FACE,
+    dialog: new Gtk.FontDialog({ title: 'Clock Font' })
+  });
   row.add_suffix(button);
-  const weight = new Adw.ComboRow({title: 'Weight', model: Gtk.StringList.new(WEIGHTS)});
+  const weight = new Adw.ComboRow({ title: 'Weight', model: Gtk.StringList.new(WEIGHTS) });
   group.add(row);
   group.add(weight);
   const interfaceIndex = families.length;
@@ -116,7 +124,7 @@ function fontRows(group, controls) {
     if (row.selected < families.length) {
       writeBundled();
     } else if (row.selected === interfaceIndex) {
-      controls.write({'glass-clock-font': ''});
+      controls.write({ 'glass-clock-font': '' });
     } else {
       // Kept until a font is picked with the button.
       button.visible = true;
@@ -130,13 +138,13 @@ function fontRows(group, controls) {
     if (syncing || !button.font_desc) return;
     const desc = button.font_desc.copy();
     desc.unset_fields(Pango.FontMask.SIZE);
-    controls.write({'glass-clock-font': desc.to_string()});
+    controls.write({ 'glass-clock-font': desc.to_string() });
   });
   return [row, weight];
 }
 
-function entryRow(group, controls, title, key, {read = v => v, write = v => v, valid = () => true} = {}) {
-  const row = new Adw.EntryRow({title, show_apply_button: true});
+function entryRow(group, controls, title, key, { read = v => v, write = v => v, valid = () => true } = {}) {
+  const row = new Adw.EntryRow({ title, show_apply_button: true });
   group.add(row);
   controls.watch([key], () => { row.text = read(controls.settings.get_value(key).deep_unpack()); });
   row.connect('apply', () => {
@@ -146,7 +154,7 @@ function entryRow(group, controls, title, key, {read = v => v, write = v => v, v
       return;
     }
     row.remove_css_class('error');
-    controls.write({[key]: write(text)});
+    controls.write({ [key]: write(text) });
   });
   return row;
 }
@@ -160,7 +168,7 @@ function language() {
 // Open-Meteo matches names in the language it is asked for, so a name
 // typed in another script is looked up again in the languages written in it.
 const SCRIPTS = [[/[\u3040-\u30ff]/, ['ja']], [/[\u4e00-\u9fff]/, ['ja', 'zh']], [/[\uac00-\ud7af]/, ['ko']],
-  [/[\u0400-\u04ff]/, ['ru', 'uk']]];
+[/[\u0400-\u04ff]/, ['ru', 'uk']]];
 
 async function searchPlaces(session, text, cancellable) {
   const tried = new Set();
@@ -194,12 +202,14 @@ function searchPlacesIn(session, text, lang, cancellable) {
 function weatherPlaceRows(group, controls) {
   const settings = controls.settings;
   const hasWeather = Gio.AppInfo.get_all().some(app => app.get_id() === 'org.gnome.Weather.desktop');
-  const current = new Adw.ActionRow({title: 'Weather place'});
-  const reset = new Gtk.Button({icon_name: 'edit-undo-symbolic', valign: Gtk.Align.CENTER, css_classes: ['flat'],
-    tooltip_text: hasWeather ? 'Use the location set in GNOME Weather' : 'Forget the place'});
+  const current = new Adw.ActionRow({ title: 'Weather place' });
+  const reset = new Gtk.Button({
+    icon_name: 'edit-undo-symbolic', valign: Gtk.Align.CENTER, css_classes: ['flat'],
+    tooltip_text: hasWeather ? 'Use the location set in GNOME Weather' : 'Forget the place'
+  });
   current.add_suffix(reset);
   group.add(current);
-  const search = new Adw.EntryRow({title: 'Search for a city or town', show_apply_button: true});
+  const search = new Adw.EntryRow({ title: 'Search for a city or town', show_apply_button: true });
   group.add(search);
 
   controls.watch(['weather-place'], () => {
@@ -207,7 +217,7 @@ function weatherPlaceRows(group, controls) {
     current.subtitle = name || (hasWeather ? 'The location set in GNOME Weather' : 'None');
     reset.sensitive = name !== '';
   });
-  reset.connect('clicked', () => controls.write({'weather-place': ['', 0, 0]}));
+  reset.connect('clicked', () => controls.write({ 'weather-place': ['', 0, 0] }));
 
   let found = [];
   let session = null;
@@ -222,24 +232,26 @@ function weatherPlaceRows(group, controls) {
     showFound([]);
     if (!text) return;
     cancellable = new Gio.Cancellable();
-    session ??= new Soup.Session({user_agent: USER_AGENT, timeout: 20});
+    session ??= new Soup.Session({ user_agent: USER_AGENT, timeout: 20 });
     let places;
     try {
       places = await searchPlaces(session, text, cancellable);
     } catch (error) {
       if (error instanceof GLib.Error && error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) return;
-      showFound([new Adw.ActionRow({title: 'The search failed', subtitle: String(error.message ?? error)})]);
+      showFound([new Adw.ActionRow({ title: 'The search failed', subtitle: String(error.message ?? error) })]);
       return;
     }
     if (places.length === 0) {
-      showFound([new Adw.ActionRow({title: `Nothing called “${text}” was found`})]);
+      showFound([new Adw.ActionRow({ title: `Nothing called “${text}” was found` })]);
       return;
     }
     showFound(places.map(place => {
-      const row = new Adw.ActionRow({title: place.name, activatable: true,
-        subtitle: [place.admin2 !== place.name ? place.admin2 : '', place.admin1, place.country].filter(Boolean).join(', ')});
+      const row = new Adw.ActionRow({
+        title: place.name, activatable: true,
+        subtitle: [place.admin2 !== place.name ? place.admin2 : '', place.admin1, place.country].filter(Boolean).join(', ')
+      });
       row.connect('activated', () => {
-        controls.write({'weather-place': [place.name, place.latitude, place.longitude]});
+        controls.write({ 'weather-place': [place.name, place.latitude, place.longitude] });
         search.text = '';
         showFound([]);
       });
@@ -260,21 +272,21 @@ function addClock(page, controls) {
   // Shown only while the clock is, so the page stays short when it is off.
   const details = controls.group(page, '');
   placeRow(details, controls, 'Place', 'glass-clock-position', 'clock');
-  controls.number(details, 'Size', ['glass-clock-size'], 48, 480, 1, '', {slider: true});
-  controls.number(details, 'Width', ['glass-clock-stretch'], 0.3, 4, 0.01, '', {slider: true});
-  controls.number(details, 'Height', ['glass-clock-height'], 1, 3, 0.01, '', {slider: true});
+  controls.number(details, 'Size', ['glass-clock-size'], 48, 480, 1, '', { slider: true });
+  controls.number(details, 'Width', ['glass-clock-stretch'], 0.3, 4, 0.01, '', { slider: true });
+  controls.number(details, 'Height', ['glass-clock-height'], 1, 3, 0.01, '', { slider: true });
   controls.choice(details, 'Taller digits', [
-    {title: 'Evenly', patch: {'glass-clock-tall-style': 'even'}},
-    {title: 'Along upright strokes', patch: {'glass-clock-tall-style': 'upright'}},
+    { title: 'Evenly', patch: { 'glass-clock-tall-style': 'even' } },
+    { title: 'Along upright strokes', patch: { 'glass-clock-tall-style': 'upright' } },
   ], 'How the digits grow when the height is above 1', false);
   controls.choice(details, 'Time format', [
-    {title: 'As in Settings', patch: {'glass-clock-format': 'system'}},
-    {title: '24-hour', patch: {'glass-clock-format': '24h'}},
-    {title: '12-hour', patch: {'glass-clock-format': '12h'}},
+    { title: 'As in Settings', patch: { 'glass-clock-format': 'system' } },
+    { title: '24-hour', patch: { 'glass-clock-format': '24h' } },
+    { title: '12-hour', patch: { 'glass-clock-format': '12h' } },
   ], '', false);
   controls.toggle(details, 'Show the date', 'glass-clock-show-date');
-  controls.number(details, 'Blur', ['glass-clock-blur-radius'], 0, 30, 1, '', {slider: true});
-  controls.number(details, 'Tint strength', ['glass-clock-tint-strength'], 0, 1, 0.01, '', {slider: true});
+  controls.number(details, 'Blur', ['glass-clock-blur-radius'], 0, 30, 1, '', { slider: true });
+  controls.number(details, 'Tint strength', ['glass-clock-tint-strength'], 0, 1, 0.01, '', { slider: true });
   fontRows(details, controls);
   controls.watch(['enable-glass-clock'], () => { details.visible = show.active; });
 }
@@ -286,7 +298,7 @@ function addWidgets(page, controls) {
   const show = controls.toggle(group, 'Show widgets', 'enable-desktop-widgets');
   const rows = [];
   for (const [id, title, subtitle] of WIDGETS) {
-    const row = new Adw.SwitchRow({title, subtitle});
+    const row = new Adw.SwitchRow({ title, subtitle });
     group.add(row);
     let syncing = false;
     controls.watch(['desktop-widgets'], () => {
@@ -299,7 +311,7 @@ function addWidgets(page, controls) {
       const chosen = new Set(settings.get_strv('desktop-widgets'));
       if (row.active) chosen.add(id);
       else chosen.delete(id);
-      controls.write({'desktop-widgets': WIDGETS.map(([w]) => w).filter(w => chosen.has(w))});
+      controls.write({ 'desktop-widgets': WIDGETS.map(([w]) => w).filter(w => chosen.has(w)) });
     });
     rows.push(row);
   }
@@ -307,9 +319,9 @@ function addWidgets(page, controls) {
     'On Now playing. GNOME shows the microphone indicator while they listen'));
   rows.push(placeRow(group, controls, 'Place', 'desktop-widgets-position', null));
   rows.push(controls.choice(group, 'Temperature', [
-    {title: 'Automatic', patch: {'weather-temperature-unit': 'auto'}},
-    {title: 'Celsius', patch: {'weather-temperature-unit': 'celsius'}},
-    {title: 'Fahrenheit', patch: {'weather-temperature-unit': 'fahrenheit'}},
+    { title: 'Automatic', patch: { 'weather-temperature-unit': 'auto' } },
+    { title: 'Celsius', patch: { 'weather-temperature-unit': 'celsius' } },
+    { title: 'Fahrenheit', patch: { 'weather-temperature-unit': 'fahrenheit' } },
   ], '', false));
   rows.push(...weatherPlaceRows(group, controls));
   controls.watch(['enable-desktop-widgets'], () => {
@@ -328,18 +340,6 @@ function addLauncher(page, controls) {
       const [ok, key] = Gtk.accelerator_parse(text);
       return ok && key !== 0;
     },
-  });
-  const transition = controls.choice(group, 'Change to pinned items', [
-    {title: 'Morph', patch: {'launcher-pinned-transition': 'morph'}},
-    {title: 'Ease', patch: {'launcher-pinned-transition': 'tween'}},
-  ], 'Ctrl+P shows the pinned items. Morph flows the glass into its new shape with the content seen deep in it; ' +
-    'Ease moves it smoothly and fades the content', false);
-  const width = controls.number(group, 'Width', ['launcher-width'], 320, 1400, 10, 'Of the search field and its results', {slider: true});
-  const height = controls.number(group, 'Pinned items height', ['launcher-pinned-height'], 240, 1200, 10, '', {slider: true});
-  const iconSize = controls.number(group, 'Pinned icon size', ['launcher-pinned-icon-size'], 32, 96, 4,
-    'Fewer, larger tiles in a narrow launcher; the tiles are spread evenly over the row', {slider: true});
-  controls.watch(['enable-launcher'], () => {
-    for (const row of [shortcut, transition, width, height, iconSize]) row.sensitive = show.active;
   });
 }
 

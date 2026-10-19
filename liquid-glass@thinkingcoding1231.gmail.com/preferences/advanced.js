@@ -67,11 +67,30 @@ function addSurface(page, controls, surface, title) {
   const group = controls.group(page, title);
   if (surface === 'top-bar') controls.choice(group, 'Style', TOP_BAR, 'The bar itself; menus have their own entries', false);
 
+
   const appearance = addNumbers(group, controls, APPEARANCE, `${surface}-`);
   controls.color(group, 'Tint', [`${surface}-tint-color`]);
   addOutline(group, controls, surface);
   addLayout(group, controls, surface, appearance);
   if (['menu', 'panel-menu', 'quick-settings'].includes(surface)) addMotion(group, controls, surface);
+  if (surface === 'launcher') {
+    const transition = controls.choice(group, 'Change to pinned items', [
+      { title: 'Morph', patch: { 'launcher-pinned-transition': 'morph' } },
+      { title: 'Ease', patch: { 'launcher-pinned-transition': 'tween' } },
+    ], 'Ctrl+P shows the pinned items.', false);
+    const morphBranch = new Branch(transition);
+    morphBranch.add(controls.number(group, 'Spring response', ['launcher-spring-response'], 0, 3, 0.01,
+      'How fast the springs respond to changes in the menu\'s size'));
+    morphBranch.add(controls.number(group, 'Spring damping fraction', ['launcher-spring-damping-fraction'], 0, 5, 0.01,
+      'How much the springs damp when they reach their target'));
+    controls.watch(['launcher-pinned-transition'], () => {
+      morphBranch.enabled = controls.settings.get_value('launcher-pinned-transition').deep_unpack() === 'morph';
+    });
+    const width = controls.number(group, 'Width', ['launcher-width'], 320, 1400, 10, 'Of the search field and its results', { slider: true });
+    const height = controls.number(group, 'Pinned items height', ['launcher-pinned-height'], 240, 1200, 10, '', { slider: true });
+    const iconSize = controls.number(group, 'Pinned icon size', ['launcher-pinned-icon-size'], 32, 96, 4,
+      'Fewer, larger tiles in a narrow launcher; the tiles are spread evenly over the row', { slider: true });
+  }
   if (ADAPTIVE_SURFACES.includes(surface)) {
     const key = `${surface}-enable-adaptive-text-color`;
     const toggle = controls.toggle(group, 'Adaptive color', key, 'Text and icons turn light or dark to stay readable on the glass');

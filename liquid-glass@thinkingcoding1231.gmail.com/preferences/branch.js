@@ -49,6 +49,10 @@ export class ToggleBranch {
     this._scenes = scenes;
     this._enabled = true;
 
+    if (this.parent) {
+      this.parent.connect('notify::visible', () => this._update());
+    }
+
     this._update();
   }
 
@@ -73,8 +77,10 @@ export class ToggleBranch {
   }
 
   _update() {
+    const parentVisible = this.parent ? this.parent.visible : true;
     this._rows.forEach((rows, i) => {
-      for (const row of rows) row.visible = this._enabled && i === this._scene;
+      const shown = this._enabled && parentVisible && i === this._scene;
+      for (const row of rows) row.visible = shown;
     });
   }
 }
