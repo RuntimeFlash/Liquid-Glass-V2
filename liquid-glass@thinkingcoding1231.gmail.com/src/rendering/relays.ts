@@ -85,6 +85,21 @@ const BackdropRelay = GObject.registerClass(
   }
 );
 
+// Actors that only carry relays for a backdrop read inside another actor's
+// paint (relayHolder()). They draw nothing, so no glass reads them.
+const holders = new WeakSet<Clutter.Actor>();
+
+/**
+ * A parent for the relays of a RelaySet whose owner is not ours to add
+ * children to. It goes on top of the UI group, which is at the stage's
+ * origin, so its coordinates are the stage's.
+ */
+export function relayHolder(): Clutter.Actor {
+  const holder = new UnpickableActor({ name: 'liquid-glass-relay-holder' });
+  holders.add(holder);
+  return holder;
+}
+
 export class RelaySet {
   // Parent of the relays, covering the sample rect (see SAMPLE_BASE). It
   // draws nothing itself; it is painted (opacity 255) so that its children
@@ -96,14 +111,15 @@ export class RelaySet {
   changes = 0;
 
   // `exclude` names actors painted before the owner that are not part of
-  // its backdrop.
-  constructor(private _owner: Clutter.Actor, private _exclude: (actor: Clutter.Actor) => boolean = () => false) {
+  // its backdrop. The relays go in `holder`, the owner itself by default.
+  constructor(private _owner: Clutter.Actor, private _exclude: (actor: Clutter.Actor) => boolean = () => false,
+    private _holder: Clutter.Actor = _owner) {
     this.area = new UnpickableActor({ name: 'liquid-glass-sample-area', width: SAMPLE_BASE, height: SAMPLE_BASE });
-    _owner.add_child(this.area);
+    _holder.add_child(this.area);
   }
 
   /**
-   * Fits the sample area to `rect` [x, y, w, h] in the owner's coordinates
+   * Fits the sample area to `rect` [x, y, w, h] in the holder's coordinates
    * and updates the relays. Returns whether the set of relayed actors
    * changed, which changes the backdrop without necessarily redrawing all
    * of it; the caller then redraws the area.
@@ -181,7 +197,7 @@ export class RelaySet {
   }
 
   private _localToStage(x0: number, y0: number, x1: number, y1: number): number[] {
-    return localToStage(this._owner, x0, y0, x1, y1);
+    return localToStage(this._holder, x0, y0, x1, y1);
   }
 
   // Everything painted before the owner, and whether it reaches the sample
@@ -196,7 +212,7 @@ export class RelaySet {
     let parent = child.get_parent();
     while (parent) {
       for (let s = parent.get_first_child(); s && s !== child; s = s.get_next_sibling()) {
-        if (!s.mapped || s.opacity === 0 || this._exclude(s)) continue;
+        if (!s.mapped || s.opacity === 0 || holders.has(s) || this._exclude(s)) continue;
         if (s === global.window_group) this._collectWindowGroup(s, near, keep, wanted);
         else wanted.set(s, sourceReach(s, near, keep));
       }

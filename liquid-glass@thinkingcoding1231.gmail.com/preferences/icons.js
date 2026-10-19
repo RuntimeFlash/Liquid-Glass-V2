@@ -9,6 +9,9 @@ const SHOW_APPS_ID = 'show-apps';
 
 const ANY_ICON_STYLE = ['icon-style-dock', 'icon-style-launcher', 'icon-style-app-grid'];
 
+// A dark dock keeps the clear look's white symbols readable over a light wallpaper.
+const CLEAR_DOCK = {'dock-tint-color': '#000000', 'dock-tint-strength': 0.16};
+
 // Installed applications as the lists show them, and the Show Apps button.
 function applications() {
   const apps = Gio.AppInfo.get_all()
@@ -44,6 +47,7 @@ export class IconStyleRules {
       {title: 'Mono', patch: {'icon-style-mode': 'mono'}},
       {title: 'Clear', patch: {'icon-style-mode': 'clear'}},
     ], '', false);
+    const clearHint = this._addClearHint(group);
     const variantRow = this.controls.choice(group, 'Variant', [
       {title: 'Dark', patch: {'icon-style-tint-variant': 'dark'}},
       {title: 'Light', patch: {'icon-style-tint-variant': 'light'}},
@@ -63,6 +67,7 @@ export class IconStyleRules {
       const on = ANY_ICON_STYLE.some(key => this.settings.get_boolean(key));
       const tinted = on && this.settings.get_string('icon-style-mode') === 'tinted';
       for (const row of rows) row.visible = on;
+      clearHint.visible = on && this.settings.get_string('icon-style-mode') === 'clear';
       variantRow.visible = accentRow.visible = tinted;
       strengthRow.visible = tinted && this.settings.get_string('icon-style-tint-variant') === 'dark';
       colorRow.visible = tinted && !this.settings.get_boolean('icon-style-use-accent');
@@ -72,6 +77,22 @@ export class IconStyleRules {
       [true, 'icon-style-blacklist', 'Icons to leave as they are'],
     ])
       this._addList(page, key, title, all);
+  }
+
+  _addClearHint(group) {
+    const row = new Adw.ActionRow({title: 'Hard to see?',
+      subtitle: 'Clear icons show what is behind them. On a light wallpaper, a black dock tint at 0.16 strength keeps them readable.'});
+    const button = new Gtk.Button({label: 'Apply', valign: Gtk.Align.CENTER});
+    button.connect('clicked', () => this.controls.write(CLEAR_DOCK));
+    row.add_suffix(button);
+    group.add(row);
+    this.controls.watch(Object.keys(CLEAR_DOCK), () => {
+      const applied = this.settings.get_string('dock-tint-color').toLowerCase() === CLEAR_DOCK['dock-tint-color'] &&
+        Math.abs(this.settings.get_value('dock-tint-strength').deep_unpack() - CLEAR_DOCK['dock-tint-strength']) < 0.005;
+      button.sensitive = !applied;
+      button.label = applied ? 'Applied' : 'Apply';
+    });
+    return row;
   }
 
   _addTuningRow(group) {

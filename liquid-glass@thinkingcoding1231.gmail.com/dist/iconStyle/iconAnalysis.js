@@ -85,6 +85,9 @@ const GROUND_NEAR = 0.1;
 const GROUND_BREADTH = 3;
 // An area with EDGE_INSIDE of its pixels within EDGE_BAND of its plate's half size from its outline is the icon's own
 // rim, which the glass's rim takes the place of.
+// A pixel outside every plate that is this transparent and this dark is a drop shadow, not symbol.
+const SHADOW_ALPHA = 0.6;
+const SHADOW_LIGHTNESS = 0.3;
 const EDGE_BAND = 0.09;
 const EDGE_INSIDE = 0.8;
 // So is a line running along the outline at an even depth within twice that, as long as the plate is wide.
@@ -1281,7 +1284,8 @@ export function symbolLayer(plates, analysisWidth, pixels) {
     for (let i = 0; i < n; i++) {
         const d = raw[i];
         if (d === Infinity) {
-            cover[i] = 1;
+            // The drop shadow an icon casts outside its base would draw as a light halo round the glass.
+            cover[i] = owner[i] < 0 && alpha[i] < SHADOW_ALPHA && lab[i * 3] < SHADOW_LIGHTNESS ? 0 : 1;
             continue;
         }
         const r = region[i] >= 0 ? list[region[i]] : null;

@@ -12,6 +12,7 @@
 #   LG_EXTRA_EXTENSIONS  more UUIDs from ~/.local/share/gnome-shell/extensions or
 #                        /usr/share/gnome-shell/extensions to enable (e.g.
 #                        blur-my-shell@aunetx, ding@rastersoft.com), space separated
+#   LG_FAVORITES      the dock's favorite-apps, a GVariant list (e.g. "['kitty.desktop']")
 #   LG_BENCH=1        also enable tools/perf/lg-bench@liquid-glass.test
 #   LG_SHELL_TIMEOUT  seconds before the shell is killed (default: 180)
 #   LG_X11=1          run an X11 session on Xvfb instead (GNOME 48 and older)
@@ -62,6 +63,7 @@ export XDG_CACHE_HOME="$out/cache"
 # Short, since a Wayland socket path is limited to 108 bytes.
 export XDG_RUNTIME_DIR=$(mktemp -d /tmp/lgrt.XXXXXX)
 export LG_SPIKE_OUT="$out/shots"
+export LG_FAVORITES="${LG_FAVORITES:-}"
 export LG_DRV_SCENARIO="${LG_DRV_SCENARIO:-dock}"
 export XDG_CURRENT_DESKTOP=GNOME
 export XDG_SESSION_DESKTOP=gnome
@@ -96,6 +98,7 @@ done
 dbus-run-session -- bash -c "
   gsettings set org.gnome.shell enabled-extensions \"['$drv_uuid', '$dtd_uuid', '$lg_uuid'$extra]\"
   gsettings set org.gnome.shell disable-user-extensions false
+  [ -n \"\${LG_FAVORITES:-}\" ] && gsettings set org.gnome.shell favorite-apps \"\$LG_FAVORITES\" || true
   gsettings set org.gnome.shell welcome-dialog-last-shown-version '9999'
   # The desktop widgets and the glass clock ship off; the scenarios that cover
   # them need them on.

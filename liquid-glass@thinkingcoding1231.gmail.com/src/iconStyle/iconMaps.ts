@@ -6,10 +6,10 @@ import GLib from 'gi://GLib';
 import type { Logger } from '../logger.js';
 import { WorkerProcess } from '../workers/workerProcess.js';
 import { type IconStyleTextures, iconStyleTexture } from './iconEffect.js';
-import { MAP_SIZE } from './styleMap.js';
+import { LENS_SIZE, MAP_SIZE } from './styleMap.js';
 
 // Changes whenever the maps would come out differently, so that older ones are made again.
-const MAP_VERSION = 7;
+const MAP_VERSION = 10;
 // Workers that take icons apart side by side; one more starts only while the others are all busy.
 const MAX_WORKERS = 4;
 // Icons asked for one after another (an app grid page, a folder) make one run of work, not one each.
@@ -59,7 +59,7 @@ function isCancelled(e: unknown): boolean {
 
 export class IconMaps {
   private _workers: WorkerProcess[];
-  // By icon file: its map's and its tones' textures.
+  // By icon file: its map's, tones' and lens map's textures.
   private _maps = new Map<string, Promise<IconStyleTextures>>();
   // By cache file: the map being made into it.
   private _making = new Map<string, Promise<void>>();
@@ -154,8 +154,9 @@ export class IconMaps {
     const cache = await this._cached(path);
     const bytes = await loadFile(cache, this._cancellable);
     const length = MAP_SIZE * MAP_SIZE * 4;
-    if (bytes.length !== length * 2) throw new Error(`${cache.get_path()} is not a style map`);
-    return { map: iconStyleTexture(bytes.subarray(0, length)), tone: iconStyleTexture(bytes.subarray(length)) };
+    if (bytes.length !== length * 2 + LENS_SIZE * LENS_SIZE * 2 * 4) throw new Error(`${cache.get_path()} is not a style map`);
+    return { map: iconStyleTexture(bytes.subarray(0, length)), tone: iconStyleTexture(bytes.subarray(length, length * 2)),
+      lens: iconStyleTexture(bytes.subarray(length * 2), LENS_SIZE, LENS_SIZE * 2) };
   }
 
   destroy(): void {

@@ -10,7 +10,8 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
   const values = new Map();
   const types = new Map();
   const ranges = new Map();
-  const xml = fs.readFileSync(path.join(root, 'schemas/org.gnome.shell.extensions.liquid-glass@thinkingcoding1231.gmail.com.gschema.xml'), 'utf8');
+  const metadata = JSON.parse(fs.readFileSync(path.join(root, 'metadata.json'), 'utf8'));
+  const xml = fs.readFileSync(path.join(root, `schemas/${metadata['settings-schema']}.gschema.xml`), 'utf8');
   for (const [, key, type, body] of xml.matchAll(/<key name="([^"]+)" type="([^"]+)">([\s\S]*?)<\/key>/g)) {
     const raw = body.match(/<default>([\s\S]*?)<\/default>/)[1].trim();
     const value = type === 'as' ? [] : type === 'a{sd}' ? {} : type === 's' ? raw.slice(1, -1) : type === 'b' ? raw === 'true'
@@ -148,10 +149,9 @@ test('editing shared blur updates all eleven surfaces in one transaction and no 
   assert.equal(f.row('Blur').subtitle, '');
 });
 
-test('corners include toggle glass and changing them does not enable any effect', () => {
+test('corners are shared across surfaces and changing them does not enable any effect', () => {
   const f = fixture(); f.row('Corners').value = 24;
-  assert.equal(f.values.get('quick-settings-toggle-corner-radius'), 24);
-  assert.equal(Object.keys(f.writes[0]).length, 12);
+  assert.equal(Object.keys(f.writes[0]).length, 11);
   assert.equal(f.values.get('enable-application-glass'), false);
   assert.equal(f.values.get('top-bar-style'), 'off');
 });
@@ -227,7 +227,7 @@ test("glass tuning opens on the current look's numbers and stores only what diff
   };
   let row = open();
   assert.ok(row('Symbol: color mixed into white'));
-  assert.equal(row('Glass: white over the backdrop'), undefined);
+  assert.equal(row('Glass: white frost'), undefined);
   f.writes.length = 0;
   row('Symbol: color mixed into white').value = 0.3;
   assert.deepEqual(f.writes.at(-1), {'icon-style-tuning': {lightSymbolTint: 0.3}});
@@ -235,7 +235,7 @@ test("glass tuning opens on the current look's numbers and stores only what diff
   f.controls.write({'icon-style-mode': 'clear'});
   row = open();
   assert.equal(row('Symbol: color mixed into white'), undefined);
-  assert.equal(row('Glass: white over the backdrop').value, 0.18);
+  assert.equal(row('Glass: white frost').value, 0.1);
 });
 
 test('closing disconnects manually owned settings subscriptions', () => {
@@ -285,7 +285,10 @@ test('advanced top bar group owns its style and shows spacing only for pills', (
   const f = fixture({'preferences-advanced': true});
   const effects = f.window.children.find(page => page.title === 'Effects').children
     .find(group => group.title === 'Individual effects');
-  assert.ok(!effects.children.some(row => row.title === 'Top bar'));
+  const effectsStyle = effects.children.find(row => row.title === 'Top bar');
+  effectsStyle.selected = 2;
+  assert.deepEqual(f.writes.at(-1), {'top-bar-style': 'islands'});
+  effectsStyle.selected = 0;
   f.row('Surface').selected = 8;
   const group = f.window.children[0].children.find(group => group.title === 'Top bar');
   const style = group.children.find(row => row.title === 'Style');
@@ -302,6 +305,15 @@ test('advanced top bar group owns its style and shows spacing only for pills', (
   assert.equal(margin.visible, true);
   style.selected = 0;
   assert.equal(padding.visible, false);
+});
+
+test('quick settings has one custom glass grid and no whole/individual mode row', () => {
+  const advanced = fixture({'preferences-advanced': true});
+  advanced.row('Surface').selected = 4;
+  const group = advanced.window.children[0].children.find(group => group.title === 'Quick settings');
+  assert.equal(group.children.find(row => row.title === 'Glass on'), undefined);
+  const simple = fixture();
+  assert.equal(simple.row('Quick settings glass'), undefined);
 });
 
 test('advanced animation intervals stay within their schema ranges on every animated surface', () => {
@@ -338,7 +350,7 @@ test('advanced groups sit above the always-visible groups on each page', () => {
     .filter(group => group.visible !== false).map(group => group.title);
   const effects = titles('Effects'), rendering = titles('Rendering');
   assert.ok(effects.indexOf('Individual effects') < effects.indexOf('Application windows'), effects.join(' | '));
-  assert.ok(rendering.indexOf('Blur') < rendering.indexOf('Compatibility'), rendering.join(' | '));
+  assert.ok(!rendering.includes('Compatibility'), rendering.join(' | '));
   assert.ok(rendering.indexOf('Shadows') < rendering.indexOf('Troubleshooting'), rendering.join(' | '));
 });
 

@@ -93,6 +93,7 @@ export function buildAdvancedPreferences(pages, controls) {
   selectorGroup.add(selector);
   const surfaces = new Map();
   const effects = controls.group(pages.effects, 'Individual effects');
+  controls.choice(effects, 'Top bar', TOP_BAR, 'The bar itself; menus have their own entries', false);
   for (const [surface, title, key, hint] of SURFACE_OPTIONS)
     if (key && surface !== 'application') controls.toggle(effects, title, key, hint ?? '');
   const groups = [selectorGroup, effects, addPanelMenus(pages.effects, controls),

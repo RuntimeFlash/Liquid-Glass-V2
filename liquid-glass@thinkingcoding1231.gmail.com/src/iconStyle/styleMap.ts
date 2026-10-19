@@ -12,13 +12,27 @@
 // distance G holds at that pixel, in G that of B's plate and in B the outer
 // plate's, from 0 (darker) through 0.5 (the look's own colour) to 1, so that
 // plates side by side in different colours, and parts of a plate a little apart
-// in shade, stay apart once they are glass in one colour.
+// in shade, stay apart once they are glass in one colour. The tone map's A
+// is unused.
+//
+// And a lens map for the glass of the clear look, LENS_SIZE wide and twice as
+// tall: the same three distances held LENS_RANGE map px each way in 16 bits,
+// deep enough for the glass's bevel, which the style map's range is not.
+//   top half     R, G  the outer plate's distance, high and low byte
+//                B, A  the plates on it
+//   bottom half  R, G  the plates on those
+//                B     the half width of the nearest plate on the outer one, over
+//                      LENS_RANGE
+//                A     the same for the plates on those
+// A distance d is stored as (d + LENS_RANGE) / (2 * LENS_RANGE).
 // Pure computation, for the worker and the tests.
 import { type IconAnalysis, type IconPixels, type Plate, type PlateShape, plateColor, shapeDistance, symbolLayer,
   withoutPlates } from './iconAnalysis.js';
 
 export const MAP_SIZE = 256;
 export const MAP_RANGE = 16;
+export const LENS_SIZE = 128;
+export const LENS_RANGE = 128;
 
 // Every outer plate is brought to this half size (a share of the icon's), so
 // that all icons in a row are the same size. The one put around icons that
@@ -36,6 +50,10 @@ const SQUARE_EXPONENT = 3.5;
 // A rounded rectangle with corners rounder than this share of its half size is a circle or a pill.
 const SQUARE_RADIUS = 0.62;
 const OUTSIDE_SHARE = 0.03;
+// The base of an icon is not exactly the shape fitted to it: where it sticks out by no more than this (analysis px),
+// a thin arc of its edge is outside the plate and would draw as a second rim, unless symbol lies against it inside.
+const SLIVER_WIDTH = 2.5;
+const SLIVER_INSIDE = 0.1;
 // Tone per unit of Oklab difference between siblings, along the way they differ most, and per unit of lightness
 // a part of a plate's surface differs from the plate.
 const TONE_GAIN = 2.5;
@@ -46,6 +64,8 @@ export interface StyleMap {
   // RGBA, 4 bytes a pixel, for the map and for the tones.
   data: Uint8Array;
   tone: Uint8Array;
+  // LENS_SIZE by twice that, RGBA.
+  lens: Uint8Array;
   // Whether the outer plate is one the icon was drawn with.
   ownPlate: boolean;
 }
@@ -69,6 +89,25 @@ function outsideShare(pixels: IconPixels, scale: number, shape: PlateShape): num
   return total ? outside / total : 0;
 }
 
+function dropSliver(symbol: Float32Array, pixels: IconPixels, scale: number, shape: PlateShape): void {
+  const { width: w, height: h } = pixels;
+  const reach = Math.ceil(1.5 / scale);
+  const outside = (i: number) => shapeDistance(shape, (i % w + 0.5) * scale, (Math.floor(i / w) + 0.5) * scale);
+  const drop: number[] = [];
+  for (let i = 0; i < symbol.length; i++) {
+    if (!symbol[i] || outside(i) <= 0 || outside(i) > SLIVER_WIDTH) continue;
+    const x = i % w, y = Math.floor(i / w);
+    let inside = 0;
+    for (let v = Math.max(0, y - reach); v <= Math.min(h - 1, y + reach); v++) {
+      for (let u = Math.max(0, x - reach); u <= Math.min(w - 1, x + reach); u++) {
+        if (outside(v * w + u) < 0) inside = Math.max(inside, symbol[v * w + u]);
+      }
+    }
+    if (inside < SLIVER_INSIDE) drop.push(i);
+  }
+  for (const i of drop) symbol[i] = 0;
+}
+
 // The centre and the half size (largest distance along x or y) of what is drawn, in analysis px.
 function extent(pixels: IconPixels, scale: number): { cx: number, cy: number, half: number } {
   let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
@@ -90,6 +129,17 @@ function depthOf(plates: Plate[], k: number): number {
 
 function encode(d: number): number {
   return Math.round(Math.min(Math.max(0.5 - d / (2 * MAP_RANGE), 0), 1) * 255);
+}
+
+// A lens distance as its high and low byte.
+function encodeLens(d: number): [number, number] {
+  const v = Math.round(Math.min(Math.max((d + LENS_RANGE) / (2 * LENS_RANGE), 0), 1) * 65535);
+  return [v >> 8, v & 255];
+}
+
+// The largest distance from a shape's outline inside it.
+function halfWidth(shape: PlateShape): number {
+  return Math.min(shape.rx, shape.ry);
 }
 
 /**
@@ -126,6 +176,7 @@ export function buildStyleMap(analysis: IconAnalysis, detail: IconPixels, size =
   const level = plates.map((_, i) => depthOf(plates, i) + (own ? 0 : 1));
 
   const { symbol, intensity, surface } = symbolLayer(plates, A, detail);
+  if (own) dropSliver(symbol, detail, scale, plates[tops[0]].shape);
   const field = new Float32Array(symbol.length);
   for (let i = 0; i < field.length; i++) field[i] = symbol[i] * intensity[i];
   const sample = (x: number, y: number, values: Float32Array = field) => {
@@ -193,7 +244,29 @@ export function buildStyleMap(analysis: IconAnalysis, detail: IconPixels, size =
       tone.set([byte(innerTone[0]), byte(innerTone[1]), byte(outerTone), 255], at);
     }
   }
-  return { size, data, tone, ownPlate: own };
+  const lens = new Uint8Array(LENS_SIZE * LENS_SIZE * 2 * 4);
+  const lensPx = size / LENS_SIZE;
+  for (let y = 0; y < LENS_SIZE; y++) {
+    for (let x = 0; x < LENS_SIZE; x++) {
+      const fx = (x + 0.5) * lensPx / mapPx, fy = (y + 0.5) * lensPx / mapPx;
+      const qx = fromX + (fx - centre) / k, qy = fromY + (fy - centre) / k;
+      const inner = [Infinity, Infinity], half = [0, 0];
+      plates.forEach((plate, i) => {
+        if (level[i] === 0) return;
+        const slot = Math.min(level[i], 2) - 1;
+        const d = shapeDistance(plate.shape, qx, qy) * k * mapPx;
+        if (d < inner[slot]) {
+          inner[slot] = d;
+          half[slot] = halfWidth(plate.shape) * k * mapPx;
+        }
+      });
+      const halfByte = (h: number) => Math.round(Math.min(h / LENS_RANGE, 1) * 255);
+      const top = (y * LENS_SIZE + x) * 4, bottom = ((y + LENS_SIZE) * LENS_SIZE + x) * 4;
+      lens.set([...encodeLens(shapeDistance(outer, fx, fy) * mapPx), ...encodeLens(inner[0])], top);
+      lens.set([...encodeLens(inner[1]), halfByte(half[0]), halfByte(half[1])], bottom);
+    }
+  }
+  return { size, data, tone, lens, ownPlate: own };
 }
 
 // Each plate's tone among the plates at its level in the map: their colours

@@ -699,7 +699,7 @@ export class Launcher {
         const gicon = result.provider?.appInfo?.get_icon();
         const icon = result.meta.createIcon(size) ?? (gicon ? new St.Icon({ gicon, icon_size: size }) : null);
         if (icon instanceof St.Icon && result.provider?.id === 'applications')
-            this._icons.styleLauncherIcon(icon, result.meta.id);
+            this._icons.styleLauncherIcon(icon, result.meta.id, this._panel);
         return icon;
     }
 
@@ -775,7 +775,7 @@ export class Launcher {
             const app = Shell.AppSystem.get_default().lookup_app(pin.id);
             if (app) {
                 const icon = app.create_icon_texture(size);
-                this._icons.styleLauncherIcon(icon, pin.id);
+                this._icons.styleLauncherIcon(icon, pin.id, this._panel);
                 return icon;
             }
         }

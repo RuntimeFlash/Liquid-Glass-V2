@@ -9,10 +9,12 @@ import {PreferenceControls} from '../liquid-glass@thinkingcoding1231.gmail.com/p
 if (GLib.getenv('GSETTINGS_BACKEND') !== 'memory') throw Error('Run with GSETTINGS_BACKEND=memory');
 Adw.init();
 const directory = Gio.File.new_for_uri(import.meta.url).get_parent().get_parent();
+const extension = directory.get_child('liquid-glass@thinkingcoding1231.gmail.com');
+const metadata = JSON.parse(new TextDecoder().decode(extension.get_child('metadata.json').load_contents(null)[1]));
 const source = Gio.SettingsSchemaSource.new_from_directory(
-  directory.get_child('liquid-glass@thinkingcoding1231.gmail.com/schemas').get_path(),
+  extension.get_child('schemas').get_path(),
   Gio.SettingsSchemaSource.get_default(), false);
-const schema = source.lookup('org.gnome.shell.extensions.liquid-glass@thinkingcoding1231.gmail.com', true);
+const schema = source.lookup(metadata['settings-schema'], true);
 const settings = new Gio.Settings({settings_schema: schema});
 settings.set_int('dock-blur-radius', 3);
 settings.set_int('menu-blur-radius', 21);
@@ -58,7 +60,7 @@ const beforeMode = effectsSnapshot();
 find('Settings view').selected = 1;
 if (effectsSnapshot() !== beforeMode) throw Error('Switching mode changed effect values');
 const groupTitles = [...walk(window)].filter(widget => widget instanceof Adw.PreferencesGroup && widget.visible).map(widget => widget.title);
-for (const [first, later] of [['Individual effects', 'Application windows'], ['Shadows', 'Compatibility'], ['Shadows', 'Troubleshooting']]) {
+for (const [first, later] of [['Individual effects', 'Application windows'], ['Shadows', 'Troubleshooting']]) {
   if (groupTitles.lastIndexOf(first) > groupTitles.indexOf(later)) throw Error(`${first} is below ${later}: ${groupTitles.join(' | ')}`);
 }
 const surface = [...walk(window)].find(row => row instanceof Adw.ComboRow && row.title === 'Surface');
@@ -123,9 +125,9 @@ settings.set_string('icon-style-mode', 'clear');
 find('Glass tuning').emit('activated');
 const tuning = window.visible_dialog;
 const tuningRows = [...walk(tuning)].filter(widget => widget instanceof Adw.SpinRow);
-if (tuningRows.length !== 7) throw Error(`Clear has ${tuningRows.length} tuning rows`);
-tuningRows.find(row => row.title === 'Rim brightness').value = 0.7;
-if (settings.get_value('icon-style-tuning').deep_unpack().clearRim !== 0.7) throw Error('Tuning did not store its value');
+if (tuningRows.length !== 4) throw Error(`Clear has ${tuningRows.length} tuning rows`);
+tuningRows.find(row => row.title === 'Symbol: shadow under it').value = 0.7;
+if (settings.get_value('icon-style-tuning').deep_unpack().clearSymbolShadow !== 0.7) throw Error('Tuning did not store its value');
 tuning.close();
 settings.reset('icon-style-tuning');
 controls.dispose();

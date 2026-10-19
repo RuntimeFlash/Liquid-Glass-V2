@@ -1,6 +1,7 @@
 // Redraws application icons in the dock (Dash to Dock), the launcher and the
 // overview's app grid as glass plates under a symbol (see iconEffect.ts), for
-// the applications the settings pick.
+// the applications the settings pick. Clear icons read what is behind them
+// from one backdrop per actor that holds them (iconBackdrop.ts).
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import Clutter from 'gi://Clutter';
@@ -11,6 +12,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import { hexToColorArray } from '../animation/colors.js';
 import { accentColors, watchAccentColor } from '../shellVersion.js';
+import { IconBackdrop } from './iconBackdrop.js';
 import { IconStyleEffect, iconStylePipeline } from './iconEffect.js';
 import { IconMaps } from './iconMaps.js';
 import { iconStyleColors } from './styleColors.js';
@@ -23,9 +25,25 @@ const EFFECT_NAME = 'liquid-glass-icon-style';
 // so that the session's start is not slowed.
 const PREPARE_DELAY_S = 5;
 const FALLBACK_ICON = 'application-x-executable';
+
+// The actor a backdrop goes on for icons in `holder`. One painted into an ancestor's offscreen, which Dash to Dock
+// keeps its dash in, cannot read the stage, so it goes above that ancestor. The offscreen keeps what was drawn
+// until something in it changes, so `cached` says the icons have to be redrawn whenever the backdrop is copied again.
+function backdropHost(holder) {
+    let host = holder, cached = false;
+    for (let actor = holder; actor; actor = actor.get_parent()) {
+        const parent = actor.get_parent();
+        if (parent && actor.offscreen_redirect & Clutter.OffscreenRedirect.ALWAYS) {
+            host = parent;
+            cached = true;
+        }
+    }
+    return { host, cached };
+}
+
 // Keys that decide which icons are styled, and keys that only change how they look.
 const KEYS = ['icon-style-dock', 'icon-style-launcher', 'icon-style-app-grid', 'icon-style-all-apps', 'icon-style-whitelist', 'icon-style-blacklist'];
-const COLOR_KEYS = ['icon-style-mode', 'icon-style-use-accent', 'icon-style-color', 'icon-style-tint-variant',
+const COLOR_KEYS = ['icon-style-use-accent', 'icon-style-color', 'icon-style-tint-variant',
     'icon-style-tint-strength', 'icon-style-symbol-opacity', 'icon-style-tuning'];
 
 function appIdOf(icon) {
@@ -57,11 +75,16 @@ function folderAppIdOf(icon) {
 }
 
 export class IconStyler {
+    _extensionPath;
     _settings;
     _logger;
     _maps;
     _shader;
     _pipeline = null;
+    _glassPipeline = null;
+    _hosts = new Map();
+    // The views of the app grid's folders, which their dialogs show over the grid.
+    _folderViews = new WeakSet();
     _theme = new St.IconTheme();
     _styled = new Map();
     // Per dock and app grid, the actors in it watched for children, by the handlers on each.
@@ -75,11 +98,12 @@ export class IconStyler {
     _unwatchAccent = () => { };
     _cancellable = new Gio.Cancellable();
 
-    constructor(extensionPath, _settings, _logger) {
+    constructor(_extensionPath, _settings, _logger) {
+        this._extensionPath = _extensionPath;
         this._settings = _settings;
         this._logger = _logger;
-        this._maps = new IconMaps(extensionPath, _logger, busy => this._notify(busy));
-        const file = Gio.File.new_for_path(`${extensionPath}/shaders/icon-style.frag`);
+        this._maps = new IconMaps(_extensionPath, _logger, busy => this._notify(busy));
+        const file = Gio.File.new_for_path(`${_extensionPath}/shaders/icon-style.frag`);
         this._shader = new Promise((resolve, reject) => {
             file.load_contents_async(this._cancellable, (_f, res) => {
                 try {
@@ -104,6 +128,7 @@ export class IconStyler {
             })),
             ...COLOR_KEYS.map(key => this._settings.connect(`changed::${key}`, () => this._recolorAll())),
             this._settings.connect('changed::icon-style-size', () => this._resizeAll()),
+            this._settings.connect('changed::icon-style-mode', () => this._restyleAll()),
         ];
         this._themeId = St.TextureCache.get_default().connect('icon-theme-changed', () => {
             this._theme = new St.IconTheme();
@@ -140,8 +165,11 @@ export class IconStyler {
             this.unwatchDock(root);
         for (const icon of [...this._styled.keys()])
             this._forget(icon);
+        for (const host of [...this._hosts.keys()])
+            this._dropHost(host);
         this._maps.destroy();
         this._pipeline = null;
+        this._glassPipeline = null;
     }
 
     /** Styles the application icons in a Dash to Dock dock, and those it adds later. */
@@ -169,9 +197,9 @@ export class IconStyler {
         this._scanSoon();
     }
 
-    /** Styles a launcher result's icon, which goes away with its row. */
-    styleLauncherIcon(icon, appId) {
-        this._style(icon, appId, 'launcher');
+    /** Styles a launcher result's icon, which goes away with its row; `panel` holds the rows over the glass. */
+    styleLauncherIcon(icon, appId, panel) {
+        this._style(icon, appId, 'launcher', null, panel);
     }
 
     // Before the next frame, so that icons a dock adds are not drawn as they are first.
@@ -203,16 +231,25 @@ export class IconStyler {
             this._scan(child, root, surface, watched);
         // A folder's apps are laid out in a view of their own, which goes into a dialog over the overview once it opens.
         const folder = actor.view;
-        if (surface === 'app-grid' && folder instanceof Clutter.Actor)
+        if (surface === 'app-grid' && folder instanceof Clutter.Actor) {
+            this._folderViews.add(folder);
             this._scan(folder, root, surface, watched);
+        }
     }
 
-    _style(icon, appId, surface, root = null) {
+    _style(icon, appId, surface, root = null, host = root) {
         if (!this._styled.has(icon)) {
             const restyle = () => this._apply(icon);
+            // A folder's icons sit in its dialog, over the grid.
+            for (let actor = icon.get_parent(); actor && actor !== root; actor = actor.get_parent()) {
+                if (this._folderViews.has(actor)) {
+                    host = actor;
+                    break;
+                }
+            }
             this._styled.set(icon, {
-                appId, surface, root, effect: null, serial: 0,
-                ids: [icon.connect('destroy', () => this._styled.delete(icon)), icon.connect('notify::gicon', restyle),
+                appId, surface, root, host, backdropHost: null, effect: null, serial: 0,
+                ids: [icon.connect('destroy', () => this._dropIcon(icon)), icon.connect('notify::gicon', restyle),
                     icon.connect('notify::fallback-gicon', restyle)],
             });
         }
@@ -226,6 +263,75 @@ export class IconStyler {
         this._styled.delete(icon);
         styled.ids.forEach(id => icon.disconnect(id));
         this._unstyle(icon, styled);
+    }
+
+    _dropIcon(icon) {
+        const styled = this._styled.get(icon);
+        if (!styled)
+            return;
+        this._styled.delete(icon);
+        this._leaveHost(icon, styled);
+    }
+
+    // The backdrop of `host`'s clear icons, made with its first.
+    _backdropFor(icon, styled) {
+        if (!styled.host)
+            return null;
+        const { host, cached } = backdropHost(styled.host);
+        styled.backdropHost = host;
+        let entry = this._hosts.get(host);
+        if (!entry) {
+            const icons = new Set();
+            const backdrop = new IconBackdrop({
+                extensionPath: this._extensionPath, settings: this._settings, logger: this._logger,
+                prefix: styled.surface === 'launcher' ? 'launcher' : 'dock', rect: () => this._extentsOf(icons),
+                copied: () => {
+                    if (cached)
+                        for (const icon of icons)
+                            icon.queue_redraw();
+                },
+            });
+            backdrop.attach(host);
+            entry = { backdrop, icons, destroyId: host.connect('destroy', () => this._dropHost(host)) };
+            this._hosts.set(host, entry);
+        }
+        entry.icons.add(icon);
+        return entry.backdrop;
+    }
+
+    _leaveHost(icon, styled) {
+        const host = styled.backdropHost;
+        styled.backdropHost = null;
+        const entry = host ? this._hosts.get(host) : null;
+        if (!entry)
+            return;
+        entry.icons.delete(icon);
+        if (!entry.icons.size)
+            this._dropHost(host);
+    }
+
+    _dropHost(host) {
+        const entry = this._hosts.get(host);
+        if (!entry)
+            return;
+        this._hosts.delete(host);
+        host.disconnect(entry.destroyId);
+        entry.backdrop.cleanup();
+    }
+
+    // The stage rect [x0, y0, x1, y1] the shown icons of a backdrop cover, as drawn (scaled) now.
+    _extentsOf(icons) {
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const icon of icons) {
+            if (!icon.mapped)
+                continue;
+            const r = icon.get_transformed_extents();
+            x0 = Math.min(x0, r.get_x());
+            y0 = Math.min(y0, r.get_y());
+            x1 = Math.max(x1, r.get_x() + r.get_width());
+            y1 = Math.max(y1, r.get_y() + r.get_height());
+        }
+        return x1 > x0 && y1 > y0 ? [x0, y0, x1, y1] : null;
     }
 
     _wanted(styled) {
@@ -324,9 +430,18 @@ export class IconStyler {
         Promise.all([this._maps.get(file), this._shader]).then(([textures, shader]) => {
             if (this._styled.get(icon) !== styled || styled.serial !== serial)
                 return;
-            this._pipeline ??= iconStylePipeline(shader);
+            const colors = this._colors();
+            const clear = this._settings.get_string('icon-style-mode') === 'clear';
+            let pipeline;
+            if (clear)
+                pipeline = this._glassPipeline ??= iconStylePipeline(shader, true);
+            else
+                pipeline = this._pipeline ??= iconStylePipeline(shader);
+            const backdrop = clear ? this._backdropFor(icon, styled) : null;
+            if (!clear)
+                this._leaveHost(icon, styled);
             const effect = styled.effect ?? new IconStyleEffect();
-            effect.prepare(this._pipeline.copy(), textures, this._colors());
+            effect.prepare(pipeline.copy(), textures, colors, backdrop);
             if (!styled.effect) {
                 styled.effect = effect;
                 icon.add_effect_with_name(EFFECT_NAME, effect);
@@ -353,6 +468,7 @@ export class IconStyler {
     }
 
     _unstyle(icon, styled) {
+        this._leaveHost(icon, styled);
         if (!styled.effect)
             return;
         icon.remove_effect(styled.effect);
