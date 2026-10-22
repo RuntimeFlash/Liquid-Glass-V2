@@ -1,19 +1,15 @@
-import { ToggleStyles } from './toggleStyles.js';
-import { stepMenuSpring, applyMenuFrame, showMenuAtRest, Spring } from '../animation/springs.js';
-import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs, startSyncLoop, stopStageLoop } from '../animation/frames.js';
-import { MenuMorphMotion, ToggleIntro } from '../animation/morph.js';
+import { ToggleStyles, ToggleBackdropGlass } from './quickSettingsToggles.js';
+import { stepMenuSpring, applyMenuFrame, showMenuAtRest, Spring, addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs, startSyncLoop, stopStageLoop, MenuMorphMotion, ToggleIntro, resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb } from './animation.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
-import { BackdropGlass } from '../rendering/backdropGlass.js';
-import { ContentLens } from '../rendering/contentLens.js';
-import { ToggleBackdropGlass } from './toggleGlass.js';
-import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from '../contrastSampler.js';
-import { LayoutOpaqueActor, ensureGlassAllocated, isActorValid, resolveMonitorGeometry, getAllocatedSize, getTransformedRect, placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS, setPositionIfChanged, setScaleIfChanged } from '../actors.js';
-import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb } from '../animation/colors.js';
-import { MENU_NO_ANIMATION } from '../shellVersion.js';
+import { BackdropGlass } from './rendering/backdropGlass.js';
+import { ContentLens } from './rendering/pipelines.js';
+import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
+import { LayoutOpaqueActor, ensureGlassAllocated, isActorValid, resolveMonitorGeometry, getAllocatedSize, getTransformedRect, placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS, setPositionIfChanged, setScaleIfChanged } from './actors.js';
+import { MENU_NO_ANIMATION } from './shellVersion.js';
 // Room around the glass rect for the shader's edge effects.
 const SHADER_PADDING = 20;
 const SAMPLE_PER_ELEMENT = false;
@@ -100,7 +96,7 @@ export class QuickSettingsManager {
     animActor;
     // Monitor-sized. In toggle mode it sits inside the menu, which is drawn
     // through an offscreen, and reads the stage through a reader outside the
-    // menu (see toggleGlass.ts).
+    // menu (see quickSettingsToggles.ts).
     glass;
     // Toggle mode. The menu's ancestor that is a direct child of uiGroup, and
     // the zero-size host that puts the glass inside the menu box (see

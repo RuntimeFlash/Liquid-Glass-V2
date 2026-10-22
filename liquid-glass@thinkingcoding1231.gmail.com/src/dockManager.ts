@@ -6,9 +6,12 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { BackdropGlass } from './rendering/backdropGlass.js';
 import { reportFrameLoopError, Logger } from './logger.js';
-import { ensureGlassAllocated, setClipIfChanged, isActorValid, placeScreenGlass, GLASS_SHADOW_MAX_RADIUS } from './actors.js';
-import { isFrameSyncFrozen, SAME_FRAME_WINDOW_US, startStageLoop, stopStageLoop } from './animation/frames.js';
-import { hexToColorArray } from './animation/colors.js';
+import {
+  ensureGlassAllocated, setClipIfChanged, isActorValid, placeScreenGlass, GLASS_SHADOW_MAX_RADIUS
+} from './actors.js';
+import {
+  isFrameSyncFrozen, SAME_FRAME_WINDOW_US, startStageLoop, stopStageLoop, hexToColorArray
+} from './animation.js';
 import type { IconStyler } from './iconStyle/iconStyler.js';
 
 // Room around the glass rect for the shader's edge effects.

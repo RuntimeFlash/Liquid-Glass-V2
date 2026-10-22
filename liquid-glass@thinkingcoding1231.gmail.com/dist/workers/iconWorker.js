@@ -4,10 +4,10 @@
 // {styled}.
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-import { analyzeIcon } from './iconAnalysis.js';
+import { analyzeIcon } from '../iconStyle/iconAnalysis.js';
 import { drawIcon } from '../imaging.js';
-import { buildStyleMap } from './styleMap.js';
-import { serveRequests } from '../workers/workerProcess.js';
+import { buildStyleMap } from '../iconStyle/styleMap.js';
+import { serveRequests } from './workerProcess.js';
 // The size the analysis is tuned at; the symbol is taken from the icon drawn at twice that.
 const ANALYSIS_SIZE = 128;
 

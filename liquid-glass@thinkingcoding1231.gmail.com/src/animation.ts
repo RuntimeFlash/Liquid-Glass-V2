@@ -1,3 +1,697 @@
+import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
+
+import { isActorValid } from './actors.js';
+import { reportFrameLoopError } from './logger.js';
+// The adaptive text color flips between a light and a dark color.
+// Interpolating those in RGB passes through mid-grey, which is unreadable on
+// the very background that triggered the flip, so a real light/dark flip
+// cross-dissolves instead: fade the old color out (easeIn), swap at the
+// bottom of the dip, fade the new one in (easeOut). Alpha is scaled between
+// the two endpoint alphas, so an actor that turns insensitive mid-flip still
+// ends at its own alpha.
+export interface RgbColor { r: number; g: number; b: number; }
+
+// '#rrggbb' as normalized [r, g, b]; anything else gives white.
+export function hexToColorArray(hex: string): [number, number, number] {
+  if (!hex || !hex.startsWith('#') || hex.length !== 7)
+    return [1.0, 1.0, 1.0];
+  return [
+    parseInt(hex.slice(1, 3), 16) / 255.0,
+    parseInt(hex.slice(3, 5), 16) / 255.0,
+    parseInt(hex.slice(5, 7), 16) / 255.0,
+  ];
+}
+
+export function hexToRgb(hex: string): RgbColor {
+  const value = parseInt(hex.replace('#', ''), 16);
+  return { r: (value >> 16) & 255, g: (value >> 8) & 255, b: value & 255 };
+}
+
+export function rgbToHex(r: number, g: number, b: number): string {
+  return '#' + (1 << 24 | r << 16 | g << 8 | b).toString(16).slice(1);
+}
+
+export function crossFadeColorAt(
+  start: RgbColor, startAlpha: number,
+  target: RgbColor, targetAlpha: number,
+  progress: number
+): { r: number; g: number; b: number; a: number } {
+  const p = Math.max(0, Math.min(1, progress));
+  if (p < 0.5) {
+    const local = p / 0.5;
+    const a = startAlpha * (1 - local * local);
+    return { r: start.r, g: start.g, b: start.b, a };
+  }
+  const local = (p - 0.5) / 0.5;
+  // easeOutQuad on the fade-in: mirrors the curve above.
+  const e = 1 - (1 - local) * (1 - local);
+  return { r: target.r, g: target.g, b: target.b, a: targetAlpha * e };
+}
+
+// A small change (off-white to white) has no grey to pass through, and a
+// dissolve would only add a flicker. Rec. 709 luma difference, 0..1.
+const CROSS_FADE_LUMA_DELTA = 0.4;
+
+export function shouldCrossFadeColors(start: RgbColor, target: RgbColor): boolean {
+  const luma = (c: RgbColor) =>
+    (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) / 255;
+  return Math.abs(luma(target) - luma(start)) > CROSS_FADE_LUMA_DELTA;
+}
+
+// Plain per-channel interpolation (easeInOutQuad), used for small changes.
+export function lerpColorAt(
+  start: RgbColor, startAlpha: number,
+  target: RgbColor, targetAlpha: number,
+  progress: number
+): { r: number; g: number; b: number; a: number } {
+  const p = Math.max(0, Math.min(1, progress));
+  const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+  return {
+    r: Math.round(start.r + (target.r - start.r) * e),
+    g: Math.round(start.g + (target.g - start.g) * e),
+    b: Math.round(start.b + (target.b - start.b) * e),
+    a: startAlpha + (targetAlpha - startAlpha) * e,
+  };
+}
+
+// 'rgb-lerp' interpolates every change, flips included, for comparison through
+// global._lgGlass.textColorMode().
+export type AdaptiveColorMode = 'cross-fade' | 'rgb-lerp';
+
+let _adaptiveColorMode: AdaptiveColorMode = 'cross-fade';
+
+export function setAdaptiveColorMode(mode: AdaptiveColorMode): void {
+  _adaptiveColorMode = mode === 'rgb-lerp' ? 'rgb-lerp' : 'cross-fade';
+}
+
+export function getAdaptiveColorMode(): AdaptiveColorMode {
+  return _adaptiveColorMode;
+}
+
+// Whether this change should dissolve rather than interpolate.
+export function resolveCrossFade(start: RgbColor, target: RgbColor): boolean {
+  return _adaptiveColorMode === 'cross-fade' && shouldCrossFadeColors(start, target);
+}
+
+// One frame-driven clock for every adaptive-color tween. Per-actor GLib
+// timers flipped a row of labels out of step and beat against the frame rate;
+// stepping every actor from the same timestamp in one BEFORE_REDRAW pass keeps
+// them together and smooth. Actors queued in the same turn share a start time
+// (`batchStart`). The later chain only runs while something is animating.
+interface ColorTweenEntry {
+  startRgb: RgbColor;
+  startAlpha: number;
+  targetRgb: RgbColor;
+  targetAlpha: number;
+  crossFade: boolean;
+  durationMs: number;
+  startTime: number; // GLib monotonic microseconds
+  // `progress` is for the OSD level bar, whose track color follows the same clock.
+  apply: (r: number, g: number, b: number, a: number, progress: number) => void;
+  // False when `apply` writes more than (r,g,b,a) describes (the level bar's
+  // track), so a repeated tuple must still be applied. Defaults to true.
+  coalesce?: boolean;
+  last?: { r: number; g: number; b: number; a: number };
+}
+
+class AdaptiveColorTweener {
+  private _entries: Map<any, ColorTweenEntry> = new Map();
+  private _laterId: number = 0;
+
+  /**
+   * @param batchStart monotonic timestamp shared by every actor updated in the
+   *   same turn. Callers pass one value for a whole color map so the actors
+   *   move in lockstep; omitted, the actor starts from now.
+   */
+  add(actor: any, entry: Omit<ColorTweenEntry, 'startTime' | 'last'>, batchStart?: number): void {
+    if (!actor) return;
+    const prev = this._entries.get(actor);
+    // Restarting mid-tween: start from what is on screen, not from the theme
+    // node, which St may not have re-resolved yet.
+    const startRgb = prev?.last
+      ? { r: prev.last.r, g: prev.last.g, b: prev.last.b }
+      : entry.startRgb;
+    const startAlpha = prev?.last ? prev.last.a : entry.startAlpha;
+
+    this._entries.set(actor, {
+      ...entry,
+      startRgb,
+      startAlpha,
+      crossFade: entry.crossFade && shouldCrossFadeColors(startRgb, entry.targetRgb),
+      startTime: batchStart ?? GLib.get_monotonic_time(),
+    });
+    this._schedule();
+  }
+
+  cancel(actor: any): void {
+    this._entries.delete(actor);
+  }
+
+  stopAll(): void {
+    this._entries.clear();
+    this._unschedule();
+  }
+
+  isAnimating(actor: any): boolean {
+    return this._entries.has(actor);
+  }
+
+  private _schedule(): void {
+    if (this._laterId !== 0) return;
+    this._laterId = global.compositor.get_laters().add(
+      Meta.LaterType.BEFORE_REDRAW,
+      () => { this._tick(); return false; }
+    );
+  }
+
+  private _unschedule(): void {
+    if (this._laterId === 0) return;
+    global.compositor.get_laters().remove(this._laterId);
+    this._laterId = 0;
+  }
+
+  private _applyEntry(e: ColorTweenEntry, now: number): number {
+    const elapsedMs = (now - e.startTime) / 1000;
+    const progress = e.durationMs > 0 ? Math.min(elapsedMs / e.durationMs, 1) : 1;
+    const c = e.crossFade
+      ? crossFadeColorAt(e.startRgb, e.startAlpha, e.targetRgb, e.targetAlpha, progress)
+      : lerpColorAt(e.startRgb, e.startAlpha, e.targetRgb, e.targetAlpha, progress);
+    const a = Math.max(0, Math.min(1, c.a));
+
+    // set_style() re-parses CSS and relayouts, so skip frames that would
+    // write the same value (the flat ends of the curve).
+    const same = e.coalesce !== false && e.last &&
+      e.last.r === c.r && e.last.g === c.g && e.last.b === c.b &&
+      Math.abs(e.last.a - a) < 0.002;
+    if (!same) {
+      e.last = { r: c.r, g: c.g, b: c.b, a };
+      e.apply(c.r, c.g, c.b, a, progress);
+    }
+    return progress;
+  }
+
+  private _tick(): void {
+    this._laterId = 0;
+    const now = GLib.get_monotonic_time();
+
+    for (const [actor, e] of [...this._entries]) {
+      if (!isActorValid(actor)) { this._entries.delete(actor); continue; }
+
+      const progress = this._applyEntry(e, now);
+
+      if (progress >= 1) this._entries.delete(actor);
+    }
+
+    if (this._entries.size > 0) this._schedule();
+  }
+}
+
+export const adaptiveColorTweener = new AdaptiveColorTweener();
+
+export const SAME_FRAME_WINDOW_US = 4000;
+
+// Diagnostic switch (global._lgGlass.freezeSync): every per-frame sync tick
+// keeps rescheduling but does no work, so the cost of the sync itself can be
+// measured. The glass stops following anything that moves while it is on.
+let _frameSyncFrozen = false;
+
+export function setFrameSyncFrozen(frozen: boolean): void {
+  _frameSyncFrozen = !!frozen;
+}
+
+export function isFrameSyncFrozen(): boolean {
+  return _frameSyncFrozen;
+}
+
+export type IdSlot = { get(): number; set(id: number): void };
+
+export function addBeforeRedraw(callback: GLib.SourceFunc): number {
+  return global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, callback);
+}
+
+export function removeBeforeRedraw(id: number): void {
+  if (!id) return;
+  global.compositor.get_laters().remove(id);
+}
+
+export type LaterLoop = {
+  alive: () => boolean;
+  step: () => void;
+  errorTag: string;
+  honourFreeze?: boolean;
+};
+
+// A self-rescheduling BEFORE_REDRAW chain. The next tick is scheduled before
+// step() runs, so an exception in step() is reported (rate-limited) instead of
+// silently ending the chain and freezing the glass.
+export function startLaterLoop(slot: IdSlot, loop: LaterLoop): boolean {
+  if (slot.get() !== 0) return false;
+  const tick = (): boolean => {
+    slot.set(0);
+    if (!loop.alive()) return GLib.SOURCE_REMOVE;
+    slot.set(addBeforeRedraw(tick));
+    if (loop.honourFreeze && isFrameSyncFrozen()) return GLib.SOURCE_REMOVE;
+    try {
+      loop.step();
+    } catch (e) {
+      reportFrameLoopError(loop.errorTag, e);
+    }
+    return GLib.SOURCE_REMOVE;
+  };
+  slot.set(addBeforeRedraw(tick));
+  return true;
+}
+
+export function stopLaterLoop(slot: IdSlot): void {
+  const id = slot.get();
+  slot.set(0);
+  removeBeforeRedraw(id);
+}
+
+// Follows the stage's own frames instead of requesting them, so an idle
+// desktop does not keep the frame clock running. `first` covers the frame in
+// which the loop starts.
+export function startStageLoop(signal: IdSlot, first: IdSlot, tick: () => void): boolean {
+  if (signal.get() !== 0) return false;
+  signal.set(global.stage.connect('before-update', tick));
+  first.set(addBeforeRedraw(() => {
+    first.set(0);
+    tick();
+    return GLib.SOURCE_REMOVE;
+  }));
+  return true;
+}
+
+export function stopStageLoop(signal: IdSlot, first: IdSlot): void {
+  const signalId = signal.get();
+  signal.set(0);
+  if (signalId) global.stage.disconnect(signalId);
+  stopLaterLoop(first);
+}
+
+/**
+ * startStageLoop() for a manager's per-frame sync, taking the same loop as
+ * startLaterLoop(). `step` runs at most once per frame (several stage views
+ * update in the same one), and the loop stops itself once `alive()` is false.
+ * Exceptions are reported rate-limited, and the loop keeps running.
+ */
+export function startSyncLoop(signal: IdSlot, first: IdSlot, loop: LaterLoop): boolean {
+  let lastUs = 0;
+  return startStageLoop(signal, first, () => {
+    if (!loop.alive()) {
+      stopStageLoop(signal, first);
+      return;
+    }
+    if (loop.honourFreeze && isFrameSyncFrozen()) return;
+    const nowUs = GLib.get_monotonic_time();
+    if (nowUs - lastUs < SAME_FRAME_WINDOW_US) return;
+    lastUs = nowUs;
+    try {
+      loop.step();
+    } catch (e) {
+      reportFrameLoopError(loop.errorTag, e);
+    }
+  });
+}
+
+const MAX_INTERVAL_MS = 50;
+
+type Ticker = { laterId: number, cb: () => boolean, minUs: number, last: number };
+
+let _nextId = 0;
+const _tickers: Map<number, Ticker> = new Map();
+
+// Steps an animation at most once per frame from a BEFORE_REDRAW later, which
+// also keeps the frame clock running while the animation lives. A GLib timer
+// would beat against the frame; smoothness comes from sub-stepping the physics
+// (Spring.update()), not from writing the actors more often. `cb` returns true
+// to keep going; the returned id stays valid across the reschedules.
+export function addFrameTicker(cb: () => boolean, minIntervalMs: number = 0): number {
+  const id = ++_nextId;
+  const ticker: Ticker = { laterId: 0, cb, minUs: Math.max(0, minIntervalMs || 0) * 1000, last: 0 };
+  _tickers.set(id, ticker);
+  const schedule = () => {
+    ticker.laterId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => {
+      ticker.laterId = 0;
+      if (_tickers.get(id) !== ticker) return GLib.SOURCE_REMOVE;
+      let keep = true;
+      const now = GLib.get_monotonic_time();
+      // At most once per frame even when several stage views update in the
+      // same one (SAME_FRAME_WINDOW_US), and a little slack so a 16ms minimum
+      // does not drop a frame whose interval happened to measure 15.9ms.
+      const due = ticker.last === 0 ||
+        now - ticker.last >= Math.max(SAME_FRAME_WINDOW_US, ticker.minUs - SAME_FRAME_WINDOW_US);
+      if (due) {
+        ticker.last = now;
+        try {
+          keep = !!ticker.cb();
+        } catch (e) {
+          keep = false;
+          reportFrameLoopError('frameTicker', e);
+        }
+      }
+      if (_tickers.get(id) !== ticker) return GLib.SOURCE_REMOVE;
+      if (keep) schedule();
+      else _tickers.delete(id);
+      return GLib.SOURCE_REMOVE;
+    });
+  };
+  schedule();
+  return id;
+}
+
+export function removeFrameTicker(id: number): void {
+  const ticker = _tickers.get(id);
+  if (!ticker) return;
+  _tickers.delete(id);
+  if (!ticker.laterId) return;
+  global.compositor.get_laters().remove(ticker.laterId);
+  ticker.laterId = 0;
+}
+
+/**
+ * Maps animation-interval-ms onto what a frame-driven animation can do:
+ * anything up to one 60Hz frame means every frame (0); larger values cap the
+ * frame rate, bounded to what the preferences offer.
+ */
+export function normalizeAnimationIntervalMs(v: number): number {
+  if (!Number.isFinite(v) || v <= 16) return 0;
+  return Math.min(Math.round(v), MAX_INTERVAL_MS);
+}
+
+// The longest frame the physics follows in full. It covers the 20fps cap the
+// preferences offer, so a capped animation keeps its speed; longer gaps (a
+// stall) are clamped instead of jumped over.
+export const MAX_STEP_S = 0.066;
+const SUB_STEP_S = 0.002;
+
+// Damped spring (Hooke's law), integrated with semi-implicit Euler.
+export class Spring {
+  private stiffness: number;
+  private damping: number;
+  private mass: number;
+  public value: number;
+  public velocity: number;
+  public target: number;
+
+  constructor(stiffness: number, damping: number, mass: number) {
+    this.stiffness = stiffness;
+    this.damping = damping;
+    this.mass = mass;
+
+    this.value = 0;
+    this.velocity = 0;
+    this.target = 0;
+  }
+
+  updateParams(stiffness: number, damping: number, mass: number) {
+    this.stiffness = stiffness;
+    this.damping = damping;
+    this.mass = mass;
+  }
+
+  update(elapsedMs: number) {
+    let dt = elapsedMs / 1000;
+    if (dt > MAX_STEP_S) dt = MAX_STEP_S;
+
+    // Sub-stepped: with the stiffness the preferences allow, a whole frame is
+    // not a stable step for an explicit integrator.
+    const mass = this.mass > 1e-3 ? this.mass : 1e-3;
+    let remaining = dt;
+    while (remaining > 1e-6) {
+      const h = Math.min(remaining, SUB_STEP_S);
+      const springForce = -this.stiffness * (this.value - this.target);
+      const dampingForce = -this.damping * this.velocity;
+      const acceleration = (springForce + dampingForce) / mass;
+
+      this.velocity += acceleration * h;
+      this.value += this.velocity * h;
+      remaining -= h;
+    }
+
+    // Settled.
+    return Math.abs(this.velocity) < 0.01 && Math.abs(this.value - this.target) < 0.001;
+  }
+}
+
+// A spring described by response (period, seconds) and damping fraction, as
+// SwiftUI does, solved analytically so it cannot diverge at any stiffness.
+export class SwiftSpring {
+  response = 0.4;
+  dampingFraction = 0.7;
+  mass = 1.0;
+
+  value = 0;
+  velocity = 0;
+  target = 0;
+
+  constructor(response: number, dampingFraction: number, mass: number = 1.0) {
+    this.updateParams(response, dampingFraction, mass);
+  }
+
+  // Out-of-range values (including NaN) keep the previous parameter.
+  updateParams(response: number, dampingFraction: number, mass: number = 1.0) {
+    if (response > 0.01) this.response = response;
+    if (dampingFraction >= 0) this.dampingFraction = dampingFraction;
+    if (mass > 0.01) this.mass = mass;
+  }
+
+  update(elapsedMs: number): boolean {
+    let dt = elapsedMs / 1000;
+
+    if (!(dt > 0)) return false;
+    if (dt > 0.1) dt = 0.1;
+
+    if (!Number.isFinite(this.value) || !Number.isFinite(this.velocity)) {
+      this.value = this.target;
+      this.velocity = 0;
+      return true;
+    }
+
+    const x0 = this.value - this.target;
+    const v0 = this.velocity;
+
+    if (Math.abs(x0) < 0.001 && Math.abs(v0) < 0.001) {
+      this.value = this.target;
+      this.velocity = 0;
+      return true;
+    }
+
+    const omega0 = (2 * Math.PI) / this.response;
+    const zeta = this.dampingFraction;
+
+    let x_t = 0;
+    let v_t = 0;
+
+    if (zeta < 0.999) {
+      // Underdamped
+      const omegaD = omega0 * Math.sqrt(1.0 - zeta * zeta);
+      const alpha = zeta * omega0;
+      const exp = Math.exp(-alpha * dt);
+      const cos = Math.cos(omegaD * dt);
+      const sin = Math.sin(omegaD * dt);
+
+      x_t = exp * (x0 * cos + ((v0 + alpha * x0) / omegaD) * sin);
+      v_t = exp * (v0 * cos - ((alpha * v0 + omega0 * omega0 * x0) / omegaD) * sin);
+    } else if (zeta > 1.001) {
+      // Overdamped
+      const beta = omega0 * Math.sqrt(zeta * zeta - 1.0);
+      const gamma1 = -zeta * omega0 + beta;
+      const gamma2 = -zeta * omega0 - beta;
+      const exp1 = Math.exp(gamma1 * dt);
+      const exp2 = Math.exp(gamma2 * dt);
+
+      const c1 = (v0 - gamma2 * x0) / (gamma1 - gamma2);
+      const c2 = x0 - c1;
+
+      x_t = c1 * exp1 + c2 * exp2;
+      v_t = c1 * gamma1 * exp1 + c2 * gamma2 * exp2;
+    } else {
+      // Critically damped
+      const exp = Math.exp(-omega0 * dt);
+      x_t = exp * (x0 + (v0 + omega0 * x0) * dt);
+      v_t = exp * (v0 - omega0 * (v0 + omega0 * x0) * dt);
+    }
+
+    this.value = x_t + this.target;
+    this.velocity = v_t;
+
+    if (!Number.isFinite(this.value)) {
+      this.value = this.target;
+      this.velocity = 0;
+      return true;
+    }
+    this.value = Math.max(-0.5, Math.min(2.5, this.value));
+
+    if (Math.abs(this.value - this.target) < 0.001 && Math.abs(this.velocity) < 0.001) {
+      this.value = this.target;
+      this.velocity = 0;
+      return true;
+    }
+
+    return false;
+  }
+}
+
+/**
+ * A rectangle carried to each new target by a spring, so it swings a little past it and settles, as liquid
+ * does. `rect()` steps the spring to the time it is given.
+ */
+export class RectSpring {
+  private _from: number[];
+  private _to: number[];
+  private _progress: SwiftSpring;
+  private _lastUs = 0;
+
+  constructor(rect: number[], response = 0.42, dampingFraction = 0.72) {
+    this._from = [...rect];
+    this._to = [...rect];
+    this._progress = new SwiftSpring(response, dampingFraction);
+    this._progress.value = 1;
+    this._progress.target = 1;
+  }
+
+  setTarget(target: number[], nowUs: number): void {
+    if (target.every((v, i) => Math.abs(v - this._to[i]) < 0.5)) return;
+    this._from = this.rect(nowUs);
+    this._to = [...target];
+    this._progress.value = 0;
+    this._progress.velocity = 0;
+  }
+
+  rect(nowUs: number): number[] {
+    if (this._lastUs) this._progress.update((nowUs - this._lastUs) / 1000);
+    this._lastUs = nowUs;
+    const p = this._progress.value;
+    return this._from.map((v, i) => v + (this._to[i] - v) * p);
+  }
+
+  settled(): boolean {
+    return this._progress.value === this._progress.target && this._progress.velocity === 0;
+  }
+}
+
+const CLOSE_SPEED = 15.0;
+const CLOSED_BELOW = 0.005;
+const OPEN_SNAP_DISTANCE = 0.002;
+const OPEN_SNAP_VELOCITY = 0.03;
+
+export interface MenuSpring {
+  value: number;
+  velocity: number;
+  target: number;
+  update(elapsedMs: number): boolean;
+}
+
+export interface MenuFrame {
+  closing: boolean;
+  stopped: boolean;
+  scale: number;
+  opacity: number;
+}
+
+function clampOpacity(v: number): number {
+  return Math.min(255, Math.max(0, v));
+}
+
+// Closing uses exponential decay: faster than the spring and never bounces.
+function stepClosing(scale: MenuSpring, elapsedMs: number): { s: number, stopped: boolean } {
+  const dt = Math.min(elapsedMs / 1000, MAX_STEP_S);
+  const k = 1.0 - Math.exp(-CLOSE_SPEED * dt);
+  scale.value += (0 - scale.value) * k;
+  if (scale.value < CLOSED_BELOW) return { s: 0, stopped: true };
+  return { s: scale.value, stopped: false };
+}
+
+// Opening uses the spring, which gives the bounce.
+function stepOpening(scale: MenuSpring, elapsedMs: number): { s: number, stopped: boolean } {
+  const settled = scale.update(elapsedMs);
+  const s = scale.value;
+  // Snap to 1.0 once the bounce has almost settled, instead of micro-stepping forever.
+  if (Math.abs(1.0 - s) < OPEN_SNAP_DISTANCE && Math.abs(scale.velocity) < OPEN_SNAP_VELOCITY)
+    return { s: 1.0, stopped: true };
+  return { s, stopped: settled };
+}
+
+export function stepMenuSpring(scale: MenuSpring, elapsedMs: number): MenuFrame {
+  const closing = scale.target === 0;
+  const { s, stopped } = closing ? stepClosing(scale, elapsedMs) : stepOpening(scale, elapsedMs);
+  // Scale 0 crashes Cogl, hence the 0.001 floor. Opacity fades out between
+  // scale 1.0 and 0.3, ahead of the shrink.
+  if (closing)
+    return { closing, stopped, scale: Math.max(0.001, s), opacity: clampOpacity((s - 0.3) / 0.7 * 255) };
+  return { closing, stopped, scale: 0.2 + s * 0.8, opacity: clampOpacity((s / 0.3) * 255) };
+}
+
+export function applyMenuFrame(frame: MenuFrame, animActor: any, glass: any, menuActor: any, sync: () => void): void {
+  animActor.set_scale(frame.scale, frame.scale);
+  glass.opacity = frame.opacity;
+  animActor.opacity = frame.opacity;
+  sync();
+  if (!frame.stopped) return;
+  if (frame.closing) {
+    if (!menuActor) return;
+    menuActor.hide();
+    glass.opacity = 0;
+    animActor.opacity = 0;
+    return;
+  }
+  animActor.set_scale(1.0, 1.0);
+  animActor.opacity = 255;
+  glass.opacity = 255;
+  sync();
+}
+
+export function showMenuAtRest(glass: any, animActor: any): void {
+  if (!glass) return;
+  glass.remove_all_transitions();
+  glass.opacity = 255;
+  glass.set_scale(1.0, 1.0);
+  if (!animActor) return;
+  animActor.set_scale(1.0, 1.0);
+  animActor.opacity = 255;
+}
+
+// A rectangle that eases to each new target in a fixed time, without the
+// overshoot of a spring.
+
+function easeOutCubic(t: number): number {
+  return 1 - (1 - t) ** 3;
+}
+
+export class RectTween {
+  private _from: number[] = [0, 0, 1, 1];
+  private _to: number[] = [0, 0, 1, 1];
+  private _startUs = 0;
+
+  constructor(private _durationMs: number) {}
+
+  /** Puts it at `rect` [x, y, w, h] and eases from there to `target`. */
+  start(rect: number[], target: number[], nowUs: number): void {
+    this._from = [...rect];
+    this._to = [...target];
+    this._startUs = nowUs;
+  }
+
+  /** Eases from where it is now to `target`, unless it is already heading there. */
+  setTarget(target: number[], nowUs: number): void {
+    if (target.every((v, i) => Math.abs(v - this._to[i]) < 0.5)) return;
+    this.start(this.rect(nowUs), target, nowUs);
+  }
+
+  /** Milliseconds until it lands, 0 once it has. */
+  remaining(nowUs: number): number {
+    return Math.max(this._durationMs - (nowUs - this._startUs) / 1000, 0);
+  }
+
+  rect(nowUs: number): number[] {
+    const t = Math.min(Math.max((nowUs - this._startUs) / (this._durationMs * 1000), 0), 1);
+    const k = easeOutCubic(t);
+    return this._from.map((v, i) => v + (this._to[i] - v) * k);
+  }
+}
+
 // How a menu's glass grows out of its panel button and goes back into it, as
 // one body of glass all the way. Opening, the button's capsule draws itself
 // into a round drop as it drops out of the button, and the drop is thrown out
@@ -17,7 +711,7 @@ export type Rect = number[];
 const STEP_S = 0.002;
 const MAX_FRAME_S = 0.05;
 
-class Spring {
+class MorphSpring {
   velocity = 0;
   target: number;
 
@@ -123,7 +817,7 @@ const CLOSE_FADE_HOLD = 1.0;
 // How the items fade in as the glass opens, every FADE_STEP_S from its start.
 const FADE_STEP_S = 0.002;
 const OPEN_FADE = (() => {
-  const fade = new Spring(0, CONTENT_FADE[0], CONTENT_FADE[1]);
+  const fade = new MorphSpring(0, CONTENT_FADE[0], CONTENT_FADE[1]);
   fade.target = 1;
   const values: number[] = [];
   for (let t = 0; t < 1; t += FADE_STEP_S) {
@@ -159,9 +853,9 @@ export interface MorphFrame {
 
 export class MenuMorphMotion {
   private _t = 0;
-  private _x: Spring;
-  private _y: Spring;
-  private _opacity: Spring;
+  private _x: MorphSpring;
+  private _y: MorphSpring;
+  private _opacity: MorphSpring;
   // Opening: how long the capsule takes to draw into a drop (0 when the
   // motion takes over from another). The rest of the motion starts after it.
   private _capsuleS: number;
@@ -212,9 +906,9 @@ export class MenuMorphMotion {
     const [stiffness, damping] = opening ? OPEN_MOVE : CLOSE_MOVE;
     // The drop is thrown from where it fell to.
     const [cx, y] = center(start.body);
-    this._x = new Spring(cx, stiffness, damping);
-    this._y = new Spring(y, stiffness, damping);
-    this._opacity = new Spring(start.contentOpacity, CONTENT_FADE[0], CONTENT_FADE[1]);
+    this._x = new MorphSpring(cx, stiffness, damping);
+    this._y = new MorphSpring(y, stiffness, damping);
+    this._opacity = new MorphSpring(start.contentOpacity, CONTENT_FADE[0], CONTENT_FADE[1]);
     if (velocities) [this._x.velocity, this._y.velocity] = velocities;
     const drop = this._drop();
     this._sizeFrom = this._capsuleS ? [drop, drop] : [start.body[2], start.body[3]];

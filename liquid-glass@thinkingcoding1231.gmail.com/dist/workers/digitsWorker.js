@@ -4,8 +4,8 @@
 // {path, width, height, band, digitHeight}.
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-import { DigitsMaker, fontKey } from './digits.js';
-import { serveRequests } from '../workers/workerProcess.js';
+import { DigitsMaker, fontKey } from '../desktop/glassText.js';
+import { serveRequests } from './workerProcess.js';
 const maker = new DigitsMaker();
 
 function save(bytes) {

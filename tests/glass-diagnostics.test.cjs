@@ -23,7 +23,7 @@ test('disabled diagnostic recorder has no timer and re-arming cannot multiply ti
   const GLib = { PRIORITY_DEFAULT_IDLE: 0, SOURCE_CONTINUE: true,
     timeout_add(_, __, fn) { const id = next++; pending.set(id, fn); return id; },
     Source: { remove(id) { assert.ok(pending.delete(id)); } } };
-  const ring = loadModule(path.join(dist, 'diagnostics/glass.js'), { GLib });
+  const ring = loadModule(path.join(dist, 'diagnostics.js'), { GLib });
   ring.startGlassRingSampler();
   assert.equal(pending.size, 0);
   ring.setGlassRingArmed(true);

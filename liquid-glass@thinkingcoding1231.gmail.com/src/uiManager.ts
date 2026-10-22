@@ -1,6 +1,8 @@
-import { stepMenuSpring, applyMenuFrame, showMenuAtRest, Spring, SwiftSpring } from './animation/springs.js';
-import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs, startSyncLoop, stopStageLoop } from './animation/frames.js';
-import { MenuMorphMotion, type MorphFrame } from './animation/morph.js';
+import {
+  stepMenuSpring, applyMenuFrame, showMenuAtRest, Spring, SwiftSpring, addFrameTicker, removeFrameTicker,
+  normalizeAnimationIntervalMs, startSyncLoop, stopStageLoop, MenuMorphMotion, type MorphFrame,
+  resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex
+} from './animation.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
@@ -8,13 +10,12 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Gio from 'gi://Gio';
 import { BackdropGlass } from './rendering/backdropGlass.js';
-import { ContentLens } from './rendering/contentLens.js';
+import { ContentLens } from './rendering/pipelines.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import {
   UnpickableWidget, ensureGlassAllocated, resolveMonitorGeometry, getAllocatedSize, isActorValid,
   placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS
 } from './actors.js';
-import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex } from './animation/colors.js';
 
 import { MENU_NO_ANIMATION, accentColors } from './shellVersion.js';
 import { Logger } from './logger.js';

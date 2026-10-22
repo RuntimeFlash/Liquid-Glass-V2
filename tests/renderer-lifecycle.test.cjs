@@ -5,7 +5,7 @@ const { loadModule } = require('./helpers/load-module.cjs');
 const { gpuFixture, dist } = require('./helpers/gpu.cjs');
 
 test('uniform state buffers before compilation and skips unchanged scalar and array writes', () => {
-  const { UniformState } = loadModule(path.join(dist, 'rendering/material.js'));
+  const { UniformState } = loadModule(path.join(dist, 'rendering/glassRenderer.js'));
   const state = new UniformState();
   const writes = [], locations = [];
   const pipeline = { get_uniform_location: name => { locations.push(name); return name; },
@@ -100,7 +100,7 @@ test('invalid, empty and almost-fullscreen geometry falls back to the whole glas
 function blurFixture() {
   const f = gpuFixture();
   f.bases.initialize(f.context);
-  const { BlurRenderer } = f.load(path.join(dist, 'rendering/blur.js'));
+  const { BlurRenderer } = f.load(path.join(dist, 'rendering/pipelines.js'));
   let repaints = 0;
   const blur = new BlurRenderer(f.bases, f.passes, () => repaints++);
   return { ...f, blur, repaints: () => repaints };

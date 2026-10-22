@@ -4,9 +4,8 @@ import St from 'gi://St';
 import GLib from 'gi://GLib';
 import { BackdropGlass } from './rendering/backdropGlass.js';
 import { isActorValid, ensureGlassAllocated, getTransformedRect, resolveMonitorGeometry, setClipIfChanged } from './actors.js';
-import { addFrameTicker, removeFrameTicker, addBeforeRedraw, removeBeforeRedraw, startSyncLoop, stopStageLoop } from './animation/frames.js';
+import { addFrameTicker, removeFrameTicker, addBeforeRedraw, removeBeforeRedraw, startSyncLoop, stopStageLoop, resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb } from './animation.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
-import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb } from './animation/colors.js';
 import { BANNER_TRANSPARENT_CLASS } from './shellVersion.js';
 // Room around the glass rect for the shader's edge effects.
 const SHADER_PADDING = 20;

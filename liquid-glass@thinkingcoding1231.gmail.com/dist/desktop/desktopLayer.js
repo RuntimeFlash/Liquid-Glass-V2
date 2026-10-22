@@ -6,12 +6,11 @@ import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { isActorValid } from '../actors.js';
-import { addBeforeRedraw, removeBeforeRedraw, startSyncLoop, stopStageLoop } from '../animation/frames.js';
+import { addBeforeRedraw, removeBeforeRedraw, startSyncLoop, stopStageLoop } from '../animation.js';
 import { MENU_ANIMATION, resetHoverCursor, setHoverCursor } from '../shellVersion.js';
 import { UIManager } from '../uiManager.js';
-import { WeatherWidget, EventsWidget } from './widgets.js';
+import { WeatherWidget, EventsWidget, MediaWidget } from './widgets.js';
 import { parseAnchors, parsePositions, placeAtFraction, fractionOf, sanitizeAnchor, stackAt, stackColumns, snapMove, placeBeside, resizeRect } from './placement.js';
-import { MediaWidget } from './media.js';
 import { GlassClock } from './clock.js';
 export const WIDGET_IDS = ['weather', 'events', 'media'];
 const ANCHOR_NAMES = [

@@ -6,9 +6,9 @@ import Mtk from 'gi://Mtk';
 import St from 'gi://St';
 import { getTransformedRect, isActorValid } from './actors.js';
 import { utilsLog } from './logger.js';
-import { createTarget } from './rendering/stageCopy.js';
+import { createTarget } from './rendering/backdropGlass.js';
 import { coglContext, paintStageToContent } from './shellVersion.js';
-import { adaptiveColorTweener, hexToRgb, resolveCrossFade } from './animation/colors.js';
+import { adaptiveColorTweener, hexToRgb, resolveCrossFade } from './animation.js';
 // How much better the other color has to score before the decision flips.
 // With a preferred color set, flipping towards it is easy and away from it
 // hard.

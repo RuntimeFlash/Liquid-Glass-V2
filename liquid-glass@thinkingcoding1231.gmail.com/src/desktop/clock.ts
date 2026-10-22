@@ -6,11 +6,10 @@ import St from 'gi://St';
 
 import { BackdropGlass } from '../rendering/backdropGlass.js';
 import { ensureGlassAllocated, isActorValid } from '../actors.js';
-import { hexToColorArray } from '../animation/colors.js';
+import { hexToColorArray } from '../animation.js';
 import { AdaptiveTextColor, sanitizeColorPreference } from '../contrastSampler.js';
 import { connectClicks, type DesktopItem, type ItemEnv, PREFERRED_MIN_CONTRAST } from './widgets.js';
-import { FIELD_RANGE, type DigitsRequest, type Digits, DigitsMaker } from './digits.js';
-import { type TallStyle } from './glassText.js';
+import { FIELD_RANGE, type DigitsRequest, type Digits, DigitsMaker, type TallStyle } from './glassText.js';
 import { coglContext } from '../shellVersion.js';
 import type { Logger } from '../logger.js';
 import { WorkerProcess } from '../workers/workerProcess.js';
@@ -375,7 +374,7 @@ export class DigitsSource {
   private _cancellable = new Gio.Cancellable();
 
   constructor(extensionPath: string, private _logger: Logger) {
-    this._worker = new WorkerProcess(`${extensionPath}/dist/desktop/digitsWorker.js`, 'clock\'s worker', _logger);
+    this._worker = new WorkerProcess(`${extensionPath}/dist/workers/digitsWorker.js`, 'clock\'s worker', _logger);
   }
 
   /** Rejects when the digits cannot be made. */

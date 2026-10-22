@@ -69,7 +69,7 @@ function fixture(background = dark, luma = 0.7) {
     resolveCrossFade: () => false,
   });
   const {StageContrastSampler, AdaptiveContrastConfig} = load(path.join(dist, 'contrastSampler.js'));
-  const {QuickSettingsManager} = load(path.join(dist, 'quickSettings/quickSettingsManager.js'));
+  const {QuickSettingsManager} = load(path.join(dist, 'quickSettingsManager.js'));
   const root = new Widget();
   const button = new Button(background, root);
   const label = new Label(transparent, button);
@@ -221,7 +221,7 @@ test('turning adaptive contrast off also rejects an already queued hover update'
 
 for (const honourFreeze of [true, false]) test(`quick-settings frame sync keeps one loop (freeze honoured: ${honourFreeze}) and stops cleanly`, () => {
   const { manager, pending, load, stage, handlers, clock } = fixture();
-  const { setFrameSyncFrozen } = load(path.join(dist, 'animation/frames.js'));
+  const { setFrameSyncFrozen } = load(path.join(dist, 'animation.js'));
   let syncs = 0;
   Object.assign(manager, { _frameSyncId: 0, _frameSignalId: 0, _torndown: false, targetActor: { mapped: true },
     glass: { get_parent: () => null, mapped: false, visible: false } });

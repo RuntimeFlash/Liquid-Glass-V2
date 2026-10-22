@@ -7,18 +7,18 @@ import {PanelMenuManager, ExtraDateMenuManager} from './dist/panelMenuManager.js
 import {BlurMyShellWatch} from './dist/blurMyShell.js';
 import {DockWatcher} from './dist/dockManager.js';
 import {NotificationManager} from './dist/notificationManager.js';
-import {QuickSettingsManager} from './dist/quickSettings/quickSettingsManager.js';
+import {QuickSettingsManager} from './dist/quickSettingsManager.js';
 import {OsdManager} from './dist/osdManager.js';
 import {ApplicationManager} from './dist/applicationManager.js';
 import {WindowListService} from './dist/windowListService.js';
 import {TopBarManager, ExtraTopBarManager} from './dist/topBarManager.js';
 import {DesktopLayer} from './dist/desktop/desktopLayer.js';
-import {Launcher} from './dist/launcher/launcher.js';
+import {Launcher} from './dist/launcherManager.js';
 import {IconStyler} from './dist/iconStyle/iconStyler.js';
 import {Logger, setUtilsLogger} from './dist/logger.js';
-import {adaptiveColorTweener} from './dist/animation/colors.js';
-import {installGlassDiagnostics, removeGlassDiagnostics, DumpShortcut} from './dist/diagnostics/glass.js';
-import {trackViewPaints, untrackViewPaints} from './dist/rendering/stageCopy.js';
+import {adaptiveColorTweener} from './dist/animation.js';
+import {installGlassDiagnostics, removeGlassDiagnostics, DumpShortcut} from './dist/diagnostics.js';
+import {trackViewPaints, untrackViewPaints} from './dist/rendering/backdropGlass.js';
 import {clearShaderSources} from './dist/rendering/pipelines.js';
 
 const QUICK_SETTINGS_DELAY_MS = 1500;

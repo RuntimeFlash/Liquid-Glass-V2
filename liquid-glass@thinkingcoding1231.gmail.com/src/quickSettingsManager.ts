@@ -1,26 +1,26 @@
-import { ToggleStyles } from './toggleStyles.js';
-import { stepMenuSpring, applyMenuFrame, showMenuAtRest, Spring } from '../animation/springs.js';
-import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs, startSyncLoop, stopStageLoop } from '../animation/frames.js';
-import { MenuMorphMotion, type MorphFrame, ToggleIntro } from '../animation/morph.js';
+import { ToggleStyles, ToggleBackdropGlass } from './quickSettingsToggles.js';
+import {
+  stepMenuSpring, applyMenuFrame, showMenuAtRest, Spring, addFrameTicker, removeFrameTicker,
+  normalizeAnimationIntervalMs, startSyncLoop, stopStageLoop, MenuMorphMotion, type MorphFrame, ToggleIntro,
+  resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb
+} from './animation.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
-import { BackdropGlass } from '../rendering/backdropGlass.js';
-import { ContentLens } from '../rendering/contentLens.js';
-import { ToggleBackdropGlass } from './toggleGlass.js';
-import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from '../contrastSampler.js';
+import { BackdropGlass } from './rendering/backdropGlass.js';
+import { ContentLens } from './rendering/pipelines.js';
+import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import Gio from 'gi://Gio';
 import {
   LayoutOpaqueActor, ensureGlassAllocated, isActorValid, resolveMonitorGeometry, getAllocatedSize,
   getTransformedRect, placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS,
   setPositionIfChanged, setScaleIfChanged
-} from '../actors.js';
-import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb } from '../animation/colors.js';
+} from './actors.js';
 
-import { MENU_NO_ANIMATION } from '../shellVersion.js';
-import { Logger } from '../logger.js';
+import { MENU_NO_ANIMATION } from './shellVersion.js';
+import { Logger } from './logger.js';
 
 // Room around the glass rect for the shader's edge effects.
 const SHADER_PADDING = 20;
@@ -117,7 +117,7 @@ function _findSubmenuGap(n: Clutter.Actor, submenu: Clutter.Actor, root: Clutter
   for (let child of n.get_children()) _findSubmenuGap(child, submenu, root, gap);
 }
 
-// Toggle mode's opening (see animation/morph.ts). The buttons are moved
+// Toggle mode's opening (see ToggleIntro in animation.ts). The buttons are moved
 // with transforms, which their glass follows; `rest` is each one's rect in the
 // menu box as laid out, and `saved` what the animation changes on it.
 interface ToggleIntroState {
@@ -155,7 +155,7 @@ export class QuickSettingsManager {
 
   // Monitor-sized. In toggle mode it sits inside the menu, which is drawn
   // through an offscreen, and reads the stage through a reader outside the
-  // menu (see toggleGlass.ts).
+  // menu (see quickSettingsToggles.ts).
   private glass: BackdropGlass | ToggleBackdropGlass | null;
 
   // Toggle mode. The menu's ancestor that is a direct child of uiGroup, and

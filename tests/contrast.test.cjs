@@ -83,7 +83,7 @@ test('a moved menu does not inherit the previous region color decision', async (
   assert.equal((await sampler.chooseColorsForActors([actor])).get(actor), config.darkTextColor);
 });
 
-const colorHelpers = load('animation/colors.js', 'hexToRgb, hexToColorArray, rgbToHex');
+const colorHelpers = load('animation.js', 'hexToRgb, hexToColorArray, rgbToHex');
 
 class Actor {
   constructor(style = 'font-weight: bold; padding: 4px;') { this.style = style; this.visible = true; }
@@ -95,7 +95,7 @@ class Actor {
   remove_style_class_name() {}
   has_style_class_name() { return false; }
 }
-for (const [file, name] of [['uiManager.js', 'UIManager'], ['notificationManager.js', 'NotificationManager'], ['osdManager.js', 'OsdManager'], ['quickSettings/quickSettingsManager.js', 'QuickSettingsManager']]) {
+for (const [file, name] of [['uiManager.js', 'UIManager'], ['notificationManager.js', 'NotificationManager'], ['osdManager.js', 'OsdManager'], ['quickSettingsManager.js', 'QuickSettingsManager']]) {
   test(`${name}: switches directly, preserves and restores native inline style`, () => {
     // Only the color methods run, with no frame loop or shader allocation.
     const C = load(file, name, { St: { Button: Actor, Widget: Actor },

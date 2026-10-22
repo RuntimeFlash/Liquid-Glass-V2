@@ -8,8 +8,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { BackdropGlass } from './rendering/backdropGlass.js';
 import type { GlassRegion } from './rendering/glassRenderer.js';
 import { ensureGlassAllocated, isActorValid } from './actors.js';
-import { startSyncLoop, stopStageLoop } from './animation/frames.js';
-import { hexToColorArray } from './animation/colors.js';
+import { startSyncLoop, stopStageLoop, hexToColorArray } from './animation.js';
 import { sanitizeColorPreference, AdaptiveTextColor } from './contrastSampler.js';
 import type { Logger } from './logger.js';
 

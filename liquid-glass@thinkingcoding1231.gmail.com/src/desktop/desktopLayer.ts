@@ -8,16 +8,15 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import { isActorValid } from '../actors.js';
-import { addBeforeRedraw, removeBeforeRedraw, startSyncLoop, stopStageLoop } from '../animation/frames.js';
+import { addBeforeRedraw, removeBeforeRedraw, startSyncLoop, stopStageLoop } from '../animation.js';
 import type { Logger } from '../logger.js';
 import { MENU_ANIMATION, type CursorShape, resetHoverCursor, setHoverCursor } from '../shellVersion.js';
 import { UIManager } from '../uiManager.js';
-import { type DesktopItem, type ItemEnv, WeatherWidget, EventsWidget } from './widgets.js';
+import { type DesktopItem, type ItemEnv, WeatherWidget, EventsWidget, MediaWidget } from './widgets.js';
 import {
   type Anchor, type Rect, parseAnchors, parsePositions, placeAtFraction, fractionOf, sanitizeAnchor, stackAt,
   stackColumns, type Guide, snapMove, type HandleSide, placeBeside, resizeRect
 } from './placement.js';
-import { MediaWidget } from './media.js';
 import { GlassClock } from './clock.js';
 
 export const WIDGET_IDS = ['weather', 'events', 'media'] as const;

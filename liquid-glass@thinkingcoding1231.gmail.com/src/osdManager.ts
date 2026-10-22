@@ -7,8 +7,10 @@ import { isActorValid, ensureGlassAllocated, setClipIfChanged } from './actors.j
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import Gio from 'gi://Gio';
 import { reportFrameLoopError, Logger } from './logger.js';
-import { isFrameSyncFrozen, SAME_FRAME_WINDOW_US, startStageLoop, stopStageLoop } from './animation/frames.js';
-import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex } from './animation/colors.js';
+import {
+  isFrameSyncFrozen, SAME_FRAME_WINDOW_US, startStageLoop, stopStageLoop, resolveCrossFade,
+  adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex
+} from './animation.js';
 
 
 interface CustomBannerActor extends St.Widget {

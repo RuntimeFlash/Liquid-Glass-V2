@@ -36,7 +36,7 @@ test('Gaussian tap merging preserves normalization, offsets and shader direction
 
 test('every registered glass is counted and the debug API goes with the last disable', () => {
   const globalThis = { global: {} };
-  const registry = createModuleLoader({ globalThis, global: globalThis.global })(path.join(dist, 'diagnostics/glass.js'));
+  const registry = createModuleLoader({ globalThis, global: globalThis.global })(path.join(dist, 'diagnostics.js'));
   registry.installGlassDiagnostics();
   const glasses = [{}, {}];
   glasses.forEach(glass => registry.registerGlass(glass));

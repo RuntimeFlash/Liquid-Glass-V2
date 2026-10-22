@@ -5,10 +5,10 @@ import Pango from 'gi://Pango';
 import St from 'gi://St';
 import { BackdropGlass } from '../rendering/backdropGlass.js';
 import { ensureGlassAllocated, isActorValid } from '../actors.js';
-import { hexToColorArray } from '../animation/colors.js';
+import { hexToColorArray } from '../animation.js';
 import { AdaptiveTextColor, sanitizeColorPreference } from '../contrastSampler.js';
 import { connectClicks, PREFERRED_MIN_CONTRAST } from './widgets.js';
-import { FIELD_RANGE, DigitsMaker } from './digits.js';
+import { FIELD_RANGE, DigitsMaker } from './glassText.js';
 import { coglContext } from '../shellVersion.js';
 import { WorkerProcess } from '../workers/workerProcess.js';
 // The drop shadow's reach (px), a little inside the distance field's.
@@ -375,7 +375,7 @@ export class DigitsSource {
 
     constructor(extensionPath, _logger) {
         this._logger = _logger;
-        this._worker = new WorkerProcess(`${extensionPath}/dist/desktop/digitsWorker.js`, 'clock\'s worker', _logger);
+        this._worker = new WorkerProcess(`${extensionPath}/dist/workers/digitsWorker.js`, 'clock\'s worker', _logger);
     }
 
     /** Rejects when the digits cannot be made. */
