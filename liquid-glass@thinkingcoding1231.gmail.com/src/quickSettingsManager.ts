@@ -226,8 +226,6 @@ export class QuickSettingsManager {
 
   private _stableBaseW: number | undefined;
   private _stableBaseH: number | undefined;
-  private _lastValidAnimAbsX: number | undefined;
-  private _lastValidAnimAbsY: number | undefined;
   private _lastBgW: number | undefined;
   private _lastBoundsSpace: 'toggles' | 'panel' | undefined;
   private _lastHostX: number | undefined;
@@ -715,11 +713,11 @@ export class QuickSettingsManager {
     else
       Main.layoutManager.uiGroup.add_child(glass.reader);
 
-    let blurRadius = this._settings.get_int('quick-settings-blur-radius');
-    let tintStrength = this._settings.get_double('quick-settings-tint-strength');
-    let brightness = this._settings.get_double('quick-settings-brightness');
-    let saturation = this._settings.get_double('quick-settings-saturation');
-    let contrast = this._settings.get_double('quick-settings-contrast');
+    const blurRadius = this._settings.get_int('quick-settings-blur-radius');
+    const tintStrength = this._settings.get_double('quick-settings-tint-strength');
+    const brightness = this._settings.get_double('quick-settings-brightness');
+    const saturation = this._settings.get_double('quick-settings-saturation');
+    const contrast = this._settings.get_double('quick-settings-contrast');
 
     glass.setPadding(SHADER_PADDING);
     this._tintColorArray = hexToColorArray(this._settings.get_string('quick-settings-tint-color'));
