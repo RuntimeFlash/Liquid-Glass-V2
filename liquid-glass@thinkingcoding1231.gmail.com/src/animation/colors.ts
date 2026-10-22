@@ -1,6 +1,6 @@
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
-import { isActorValid } from '../actors/lifecycle.js';
+import { isActorValid } from '../actors.js';
 // The adaptive text color flips between a light and a dark color.
 // Interpolating those in RGB passes through mid-grey, which is unreadable on
 // the very background that triggered the flip, so a real light/dark flip

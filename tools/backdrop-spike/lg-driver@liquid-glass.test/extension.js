@@ -904,7 +904,7 @@ export default class LgDriver extends Extension {
 
     // The buttons springing out as the menu opens, slowed down 8 times, and
     // the least gap between two buttons' glass over a full-speed opening.
-    const {ToggleIntro} = await this._lgModule('animation/toggleIntro.js');
+    const {ToggleIntro} = await this._lgModule('animation/morph.js');
     const frame = ToggleIntro.prototype.frame;
     let slow = 8, least = Infinity;
     // Per frame of a full-speed opening: its time and each button's width.
@@ -1567,7 +1567,7 @@ export default class LgDriver extends Extension {
 
   // Runs the menus' morphs `factor` times slower, so shots catch them midway.
   async _slowMorph(factor) {
-    const {MenuMorphMotion} = await this._lgModule('animation/menuMorph.js');
+    const {MenuMorphMotion} = await this._lgModule('animation/morph.js');
     const step = MenuMorphMotion.prototype._drvStep ?? MenuMorphMotion.prototype.step;
     MenuMorphMotion.prototype._drvStep = step;
     MenuMorphMotion.prototype.step = function (elapsed) {
@@ -3156,7 +3156,7 @@ export default class LgDriver extends Extension {
     }
     if (parts.includes('morphtrace')) {
       // Every frame of the calendar's glass at full speed.
-      const {MenuMorphMotion} = await this._lgModule('animation/menuMorph.js');
+      const {MenuMorphMotion} = await this._lgModule('animation/morph.js');
       const step = MenuMorphMotion.prototype.step;
       const t0 = GLib.get_monotonic_time();
       MenuMorphMotion.prototype.step = function (elapsed) {

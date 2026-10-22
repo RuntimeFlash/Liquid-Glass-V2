@@ -1,7 +1,5 @@
 import Cogl from 'gi://Cogl';
-import { ShaderPipelines, configureSamplerLayer } from './pipelines.js';
-import { RenderPasses, setPipelineFloat, setPipelineVec2 } from './passes.js';
-import { computeGaussianKernel, buildGaussianSnippet, type GaussianKernel } from './shaderSource.js';
+import { ShaderPipelines, configureSamplerLayer, RenderPasses, setPipelineFloat, setPipelineVec2, computeGaussianKernel, buildGaussianSnippet, type GaussianKernel } from './pipelines.js';
 import { uniformDeclarations } from '../shellVersion.js';
 
 // 0: separable Gaussian (shader generated from the kernel), 1: Dual Kawase.

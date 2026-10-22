@@ -13,7 +13,7 @@ function fixture() {
     remove(id) { pending.delete(id); },
   };
   const errors = [];
-  const ticker = loadModule(path.join(dist, 'animation/frameTicker.js'), {
+  const ticker = loadModule(path.join(dist, 'animation/frames.js'), {
     Meta: { LaterType: { BEFORE_REDRAW: 0 } },
     GLib: { get_monotonic_time: () => now, SOURCE_REMOVE: false },
     global: { compositor: { get_laters: () => laters } },

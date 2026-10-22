@@ -9,7 +9,7 @@ test('helper actors use the native hidden-from-pick flag used by GNOME drag and 
     constructor(params = {}) { this._init(params); }
     _init(params = {}) { Object.assign(this, params); }
   }
-  const unpickable = loadModule(path.join(dist, 'actors/unpickable.js'), {
+  const unpickable = loadModule(path.join(dist, 'actors.js'), {
     GObject: { registerClass: (...args) => args.at(-1) },
     Clutter: { Actor }, St: { Widget: Actor },
     Shell: { util_set_hidden_from_pick(actor, hidden) { actor.hiddenFromPick = hidden; } },

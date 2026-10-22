@@ -8,8 +8,7 @@ import Clutter from 'gi://Clutter';
 import Graphene from 'gi://Graphene';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
-import { UnpickableActor } from '../actors/unpickable.js';
-import { setTranslationIfChanged, setScaleIfChanged } from '../actors/writes.js';
+import { UnpickableActor, setTranslationIfChanged, setScaleIfChanged } from '../actors.js';
 import { canCloneSource, undoCloneScale } from '../shellVersion.js';
 // Room around the sample rect, so the rect can shift a little at paint time
 // (the live geometry hook) and still be inside the redrawn area.

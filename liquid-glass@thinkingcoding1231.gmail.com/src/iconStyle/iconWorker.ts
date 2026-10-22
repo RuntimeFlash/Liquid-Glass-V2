@@ -6,7 +6,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
 import { analyzeIcon } from './iconAnalysis.js';
-import { drawIcon } from './iconRaster.js';
+import { drawIcon } from '../imaging.js';
 import { buildStyleMap } from './styleMap.js';
 import { serveRequests } from '../workers/workerProcess.js';
 

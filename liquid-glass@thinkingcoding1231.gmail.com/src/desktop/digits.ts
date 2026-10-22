@@ -3,9 +3,8 @@
 // of their own (digitsWorker.ts), or in the shell where that cannot start.
 import Gio from 'gi://Gio';
 
-import { bundledFontFile } from './bundledFonts.js';
+import { bundledFontFile, TrueTypeFont } from './fonts.js';
 import { GlyphFields, type TallStyle, type TextFace, encodeFields, fileFace, maxDepth, pangoFace, softenedInSteps } from './glassText.js';
-import { TrueTypeFont } from './trueType.js';
 
 // How far (px) the distance field reaches past the outline: room for the
 // drop shadow, whose reach stays a little inside it.

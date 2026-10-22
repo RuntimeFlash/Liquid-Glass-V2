@@ -15,7 +15,7 @@ import type { BlurMethod } from './blur.js';
 import { StageCopier } from './stageCopy.js';
 import { coglContext, paintNodeWithContext } from '../shellVersion.js';
 import { RelaySet, SAMPLE_MARGIN, localToStage } from './relays.js';
-import { windowMayCover } from '../actors/windows.js';
+import { windowMayCover } from '../actors.js';
 import { registerGlass, unregisterGlass } from '../diagnostics/glass.js';
 
 export interface GlassActorParams {

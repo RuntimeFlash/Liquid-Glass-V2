@@ -6,7 +6,7 @@ import Gtk from 'gi://Gtk';
 import Pango from 'gi://Pango';
 import Soup from 'gi://Soup?version=3.0';
 
-import { BUNDLED_FAMILIES } from '../dist/desktop/bundledFonts.js';
+import { BUNDLED_FAMILIES } from '../dist/desktop/fonts.js';
 import { PreferenceControls, Branch, ToggleBranch, uniformPatch, dumpSettings, parseSettings } from './controls.js';
 import { IconStyleRules, WindowRules } from './apps.js';
 

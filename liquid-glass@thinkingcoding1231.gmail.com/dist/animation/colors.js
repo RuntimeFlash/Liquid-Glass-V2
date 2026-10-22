@@ -1,6 +1,6 @@
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
-import { isActorValid } from '../actors/lifecycle.js';
+import { isActorValid } from '../actors.js';
 
 // '#rrggbb' as normalized [r, g, b]; anything else gives white.
 export function hexToColorArray(hex) {

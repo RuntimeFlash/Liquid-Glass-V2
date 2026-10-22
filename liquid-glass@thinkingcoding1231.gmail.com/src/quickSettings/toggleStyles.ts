@@ -37,7 +37,7 @@ function _releaseEntry(pod: Clutter.Actor, entry: ToggleEntry): void {
 }
 
 export class ToggleStyles {
-  constructor(private _logger: Logger, private _isOpen: () => boolean) {}
+  constructor(private _logger: Logger, private _isOpen: () => boolean) { }
 
   sync(root: Clutter.Actor): Clutter.Actor[] {
     const toggles = this._findAllToggleContainers(root);
@@ -399,13 +399,13 @@ export class ToggleStyles {
 
     this._toggleColorTimerId = GLib.timeout_add(
       GLib.PRIORITY_DEFAULT, ToggleStyles.TOGGLE_COLOR_SAMPLE_MS, () => {
-      if (!this._isOpen()) {
-        this._toggleColorTimerId = 0;
-        return GLib.SOURCE_REMOVE;
-      }
-      this._resampleToggleColors();
-      return GLib.SOURCE_CONTINUE;
-    });
+        if (!this._isOpen()) {
+          this._toggleColorTimerId = 0;
+          return GLib.SOURCE_REMOVE;
+        }
+        this._resampleToggleColors();
+        return GLib.SOURCE_CONTINUE;
+      });
   }
 
   // The pseudo-classes of the actors _samplePodColor() can pick from.

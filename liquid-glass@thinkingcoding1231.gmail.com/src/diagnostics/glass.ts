@@ -1,10 +1,13 @@
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
+import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import { setFrameSyncFrozen, isFrameSyncFrozen } from '../animation/frameSync.js';
-import { setDiffWritesEnabled, isDiffWritesEnabled } from '../actors/writes.js';
+
+import { setFrameSyncFrozen, isFrameSyncFrozen } from '../animation/frames.js';
+import { setDiffWritesEnabled, isDiffWritesEnabled, setWindowActorRescueMode, getWindowActorRescueMode, type WindowActorRescueMode } from '../actors.js';
 import { setAdaptiveColorMode, getAdaptiveColorMode, type AdaptiveColorMode } from '../animation/colors.js';
-import { setWindowActorRescueMode, getWindowActorRescueMode, type WindowActorRescueMode } from '../actors/allocation.js';
-import { diagnosticLog } from './logging.js';
+import { diagnosticLog } from '../logger.js';
 import { startGlassMonitor, stopGlassMonitor, isGlassMonitorRunning, setGlassMonitorLabel } from './monitor.js';
 
 // Every live glass registers here so its last frame can be inspected from
@@ -338,4 +341,82 @@ export function registerGlass(glass: any): void {
 
 export function unregisterGlass(glass: any): void {
   _liveGlasses.delete(glass);
+}
+
+const INTERVAL_MS = 100;
+const TICKS = 600;
+const KEYBINDING = 'dump-loop-keybinding';
+
+/**
+ * An optional shortcut (enable-dump-shortcut, off by default) that writes the state of every glass to the journal
+ * for a minute, for bug reports. Pressed again, it stops early.
+ */
+export class DumpShortcut {
+  private _settingId = 0;
+  private _installed = false;
+  private _loopId = 0;
+
+  constructor(private _settings: Gio.Settings) {}
+
+  setup(): void {
+    this._settingId = this._settings.connect('changed::enable-dump-shortcut', () => this._sync());
+    this._sync();
+  }
+
+  cleanup(): void {
+    this._settings.disconnect(this._settingId);
+    this._stop();
+    if (this._installed) Main.wm.removeKeybinding(KEYBINDING);
+    this._installed = false;
+  }
+
+  private _sync(): void {
+    const wanted = this._settings.get_boolean('enable-dump-shortcut');
+    if (wanted && !this._installed) {
+      Main.wm.addKeybinding(KEYBINDING, this._settings, Meta.KeyBindingFlags.NONE,
+        Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW, () => this._toggle());
+      this._installed = true;
+    } else if (!wanted && this._installed) {
+      Main.wm.removeKeybinding(KEYBINDING);
+      this._installed = false;
+      this._stop();
+    }
+  }
+
+  // The accelerator as the user sees it, for the notifications.
+  private _label(): string {
+    const accel = this._settings.get_strv(KEYBINDING)[0];
+    if (!accel) return 'the shortcut';
+    return accel.replace(/<Control>/gi, 'Ctrl+').replace(/<Alt>/gi, 'Alt+').replace(/<Shift>/gi, 'Shift+')
+      .replace(/<Super>/gi, 'Super+').replace(/\+([a-z])$/, (_, k: string) => `+${k.toUpperCase()}`);
+  }
+
+  private _stop(): boolean {
+    if (!this._loopId) return false;
+    GLib.Source.remove(this._loopId);
+    this._loopId = 0;
+    return true;
+  }
+
+  private _toggle(): void {
+    if (this._stop()) {
+      Main.notify('Liquid Glass', 'Diagnostic dump stopped');
+      return;
+    }
+    // The ring buffer holds the frames before the key press, which the loop that starts now cannot capture.
+    flushGlassRing();
+    const seconds = (TICKS * INTERVAL_MS) / 1000;
+    const endsAt = new Date(Date.now() + seconds * 1000);
+    const hhmmss = (d: Date) => [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':');
+    // Marks where the capture starts in the journal.
+    diagnosticLog(`[Liquid Glass][dump-loop] STARTED ${TICKS} ticks @ ${INTERVAL_MS}ms, ends ${hhmmss(endsAt)}`);
+    Main.notify('Liquid Glass', `Diagnostic dump running ${seconds}s — ends at ${hhmmss(endsAt)} (${this._label()} to stop)`);
+    let count = 0;
+    this._loopId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, INTERVAL_MS, () => {
+      dumpGlassState();
+      if (++count < TICKS) return GLib.SOURCE_CONTINUE;
+      this._loopId = 0;
+      return GLib.SOURCE_REMOVE;
+    });
+  }
 }

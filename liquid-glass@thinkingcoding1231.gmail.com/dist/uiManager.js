@@ -1,7 +1,6 @@
-import { stepMenuSpring, applyMenuFrame, showMenuAtRest } from './animation/menuSpring.js';
-import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
-import { Spring, SwiftSpring } from './animation/spring.js';
-import { MenuMorphMotion } from './animation/menuMorph.js';
+import { stepMenuSpring, applyMenuFrame, showMenuAtRest, Spring, SwiftSpring } from './animation/springs.js';
+import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs, startSyncLoop, stopStageLoop } from './animation/frames.js';
+import { MenuMorphMotion } from './animation/morph.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
@@ -11,12 +10,7 @@ import Gio from 'gi://Gio';
 import { BackdropGlass } from './rendering/backdropGlass.js';
 import { ContentLens } from './rendering/contentLens.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
-import { UnpickableWidget } from './actors/unpickable.js';
-import { ensureGlassAllocated } from './actors/allocation.js';
-import { resolveMonitorGeometry, getAllocatedSize } from './actors/geometry.js';
-import { isActorValid } from './actors/lifecycle.js';
-import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
-import { placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS } from './actors/glassBounds.js';
+import { UnpickableWidget, ensureGlassAllocated, resolveMonitorGeometry, getAllocatedSize, isActorValid, placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS } from './actors.js';
 import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex } from './animation/colors.js';
 import { MENU_NO_ANIMATION, accentColors } from './shellVersion.js';
 // Room around the glass rect for the shader's edge effects.

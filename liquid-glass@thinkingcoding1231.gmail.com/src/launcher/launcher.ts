@@ -10,21 +10,15 @@ import St from 'gi://St';
 
 import { BackdropGlass } from '../rendering/backdropGlass.js';
 import { ContentLens } from '../rendering/contentLens.js';
-import { ensureGlassAllocated } from '../actors/allocation.js';
-import { isActorValid } from '../actors/lifecycle.js';
-import { startSyncLoop, stopStageLoop } from '../animation/frameLoops.js';
+import { ensureGlassAllocated, isActorValid } from '../actors.js';
+import { startSyncLoop, stopStageLoop } from '../animation/frames.js';
 import { hexToColorArray } from '../animation/colors.js';
-import { RectTween } from '../animation/tween.js';
-import { RectSpring } from '../animation/spring.js';
-import { AdaptiveTextColor } from '../adaptiveText.js';
-import { sanitizeColorPreference } from '../contrastSampler.js';
+import { RectTween, RectSpring } from '../animation/springs.js';
+import { AdaptiveTextColor, sanitizeColorPreference } from '../contrastSampler.js';
 import { verticalBoxParams } from '../shellVersion.js';
 import type { Logger } from '../logger.js';
 import type { IconStyler } from '../iconStyle/iconStyler.js';
-import { evaluate, formatNumber } from './calculator.js';
-import { type Pin, PinStore } from './pins.js';
-import { pinnedGrid } from './pinnedGrid.js';
-import { SOFTWARE_PROVIDER, softwareDesktopId } from './software.js';
+import { evaluate, formatNumber, type Pin, PinStore, pinnedGrid, SOFTWARE_PROVIDER, softwareDesktopId } from './results.js';
 
 // The pinned items' page is this much wider than the search.
 const PINNED_EXTRA_WIDTH = 80;

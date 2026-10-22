@@ -3,14 +3,10 @@ import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import { BackdropGlass } from './rendering/backdropGlass.js';
-import { isActorValid } from './actors/lifecycle.js';
-import { addFrameTicker, removeFrameTicker } from './animation/frameTicker.js';
+import { isActorValid, ensureGlassAllocated, getTransformedRect, resolveMonitorGeometry, setClipIfChanged } from './actors.js';
+import { addFrameTicker, removeFrameTicker, addBeforeRedraw, removeBeforeRedraw, startSyncLoop, stopStageLoop } from './animation/frames.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference, type SampleRect } from './contrastSampler.js';
 import Gio from 'gi://Gio';
-import { ensureGlassAllocated } from './actors/allocation.js';
-import { getTransformedRect, resolveMonitorGeometry } from './actors/geometry.js';
-import { addBeforeRedraw, removeBeforeRedraw, startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
-import { setClipIfChanged } from './actors/writes.js';
 import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb } from './animation/colors.js';
 
 import { Logger } from './logger.js';

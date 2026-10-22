@@ -10,8 +10,8 @@ import GLib from 'gi://GLib';
 import Pango from 'gi://Pango';
 import PangoCairo from 'gi://PangoCairo';
 import Cairo from 'cairo';
-import { traceGlyph } from './trueType.js';
-import { decodePng } from '../imaging/png.js';
+import { traceGlyph } from './fonts.js';
+import { decodePng } from '../imaging.js';
 // Glyphs are drawn this many times larger and their fields scaled down, for
 // sub-pixel accurate edges.
 const SUPERSAMPLE = 2;

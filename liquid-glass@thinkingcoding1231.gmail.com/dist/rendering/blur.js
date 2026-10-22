@@ -1,7 +1,5 @@
 import Cogl from 'gi://Cogl';
-import { configureSamplerLayer } from './pipelines.js';
-import { setPipelineFloat, setPipelineVec2 } from './passes.js';
-import { computeGaussianKernel, buildGaussianSnippet } from './shaderSource.js';
+import { configureSamplerLayer, setPipelineFloat, setPipelineVec2, computeGaussianKernel, buildGaussianSnippet } from './pipelines.js';
 import { uniformDeclarations } from '../shellVersion.js';
 
 export class BlurRenderer {

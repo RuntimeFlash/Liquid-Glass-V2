@@ -95,7 +95,7 @@ class Actor {
   remove_style_class_name() {}
   has_style_class_name() { return false; }
 }
-for (const [file, name] of [['uiManager.js', 'UIManager'], ['notificationManager.js', 'NotificationManager'], ['osdManager.js', 'OsdManager'], ['quickSettingsManager.js', 'QuickSettingsManager']]) {
+for (const [file, name] of [['uiManager.js', 'UIManager'], ['notificationManager.js', 'NotificationManager'], ['osdManager.js', 'OsdManager'], ['quickSettings/quickSettingsManager.js', 'QuickSettingsManager']]) {
   test(`${name}: switches directly, preserves and restores native inline style`, () => {
     // Only the color methods run, with no frame loop or shader allocation.
     const C = load(file, name, { St: { Button: Actor, Widget: Actor },

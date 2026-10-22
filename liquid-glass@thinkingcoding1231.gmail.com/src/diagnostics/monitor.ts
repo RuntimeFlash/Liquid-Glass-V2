@@ -14,8 +14,8 @@ import Mtk from 'gi://Mtk';
 import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-import { diagnosticLog } from './logging.js';
-import { isActorValid } from '../actors/lifecycle.js';
+import { diagnosticLog } from '../logger.js';
+import { isActorValid } from '../actors.js';
 import { paintNodeWithContext } from '../shellVersion.js';
 
 const SAMPLE_MS = 100;

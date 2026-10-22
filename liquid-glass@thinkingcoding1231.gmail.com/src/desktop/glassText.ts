@@ -11,8 +11,8 @@ import Pango from 'gi://Pango';
 import PangoCairo from 'gi://PangoCairo';
 import Cairo from 'cairo';
 
-import { type TrueTypeFont, traceGlyph } from './trueType.js';
-import { decodePng } from '../imaging/png.js';
+import { type TrueTypeFont, traceGlyph } from './fonts.js';
+import { decodePng } from '../imaging.js';
 
 // Glyphs are drawn this many times larger and their fields scaled down, for
 // sub-pixel accurate edges.
