@@ -18,6 +18,8 @@ const SHADOW_REACH = 40;
 const FONT_DELAY_MS = 120;
 // The date sits this far (px) above the glass digits' outline.
 const DATE_GAP = 6;
+// The date's font size relative to the clock's digits.
+const DATE_SIZE_RATIO = 0.13;
 const SIZE_KEYS = ['glass-clock-size', 'glass-clock-stretch', 'glass-clock-height'];
 
 // The [min, max] the schema allows for a number key.
@@ -175,7 +177,7 @@ export class GlassClock {
             return;
         this._font = next;
         this._prepared.clear();
-        this._date.set_style(`font-size: ${Math.max(11, Math.round(next.size * 0.13))}px;`);
+        this._date.set_style(`font-size: ${Math.max(11, Math.round(next.size * DATE_SIZE_RATIO))}px;`);
         this._text = '';
         this._tick();
     }
@@ -228,7 +230,7 @@ export class GlassClock {
         const now = GLib.DateTime.new_now_local();
         this._date.visible = this._env.settings.get_boolean('glass-clock-show-date');
         this._date.text = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-        this._setText(this._timeText(now));
+        this._setText(this._timeText(now)); // Set glass clock's text
         this._sizeChanged = true;
         const wait = 60 - now.get_seconds() + 0.05;
         this._timerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, Math.ceil(wait * 1000), () => {

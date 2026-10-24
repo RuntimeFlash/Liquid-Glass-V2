@@ -1624,6 +1624,7 @@ export class UIManager {
             this.menu.disconnect(this._animSignalId);
             this._animSignalId = 0;
         }
+        this._openedFrom = null;
         if (this._destroySignalId) {
             this.targetActor.disconnect(this._destroySignalId);
             this._destroySignalId = 0;

@@ -1882,6 +1882,7 @@ export class QuickSettingsManager {
             this.menu.disconnect(this._animSignalId);
             this._animSignalId = 0;
         }
+        this._openedFrom = null;
         if (this._tickId !== 0) {
             removeFrameTicker(this._tickId);
             this._tickId = 0;
