@@ -14,10 +14,18 @@ const SHADOW_ROOM = 48;
 const SIDES = ['top', 'bottom', 'left', 'right'];
 
 function sanitizeStyle(value) {
-    return value === 'pill' || value === 'islands' ? value : 'off';
+    return value === 'pill' || value === 'islands' || value === 'center' ? value : 'off';
 }
 
-/** Glass behind the top bar: one pill or separate islands for its three button groups. */
+/**
+ * Width at which the shell's Panel fits its boxes at their natural widths. It puts the center box in the
+ * middle and gives both sides the same room, shifted by the work area's offset when a dock is fixed to a side.
+ */
+export function centeredBarWidth(left, center, right, centerOffset) {
+    return Math.ceil(center + 2 * Math.max(left, right) + Math.abs(centerOffset));
+}
+
+/** Glass behind the top bar: one pill, separate islands for its three button groups, or one pill the bar shrinks to. */
 export class TopBarManager {
     _path;
     _settings;
@@ -46,6 +54,10 @@ export class TopBarManager {
     _forwardedPresses = new Map();
     _stagePointerSignalId = 0;
     _applyingLayout = false;
+    // The bar's width while the centered style shrinks it, and what it replaced on the bar and quick settings.
+    _centeredWidth = 0;
+    _savedXAlign = 0;
+    _savedQuickSettingsAlignment = 0;
 
     constructor(_path, _settings, _logger,
     // The panel's boxes are not part of the shell's typings.
@@ -111,6 +123,18 @@ export class TopBarManager {
         const styled = new Set([panel, panel._leftBox, panel._centerBox, ...this._sections()]);
         this._savedStyles = [...styled].map(actor => [actor, actor.get_style()]);
         this._childrenStyles = [];
+        if (this._style === 'center') {
+            // panelBox keeps the monitor's width, so the bar stays above maximized windows.
+            this._savedXAlign = panel.x_align;
+            panel.x_align = Clutter.ActorAlign.CENTER;
+            // Quick settings opens from its button's left edge and counts on the screen edge to push it back, so in
+            // the middle of the screen it would hang past the bar. The other monitors' bars open this same menu.
+            if (this._owner === 'top-bar') {
+                const menu = Main.panel.statusArea.quickSettings.menu;
+                this._savedQuickSettingsAlignment = menu._arrowAlignment;
+                menu._arrowAlignment = 0.5;
+            }
+        }
         // Reapply layout when the theme changes the bar height.
         this._panelStyleId = panel.connect('style-changed', () => this._applyLayout());
         this._applyLayout();
@@ -462,6 +486,10 @@ export class TopBarManager {
 
     // Sync the glass beneath the panel, hiding it with the bar.
     _sync() {
+        // Lays the stage out now if this bar waits for it, so the reads below see allocations. On a bar queued for
+        // relayout, size getters re-measure part of its tree mid-frame, and Multi Monitors Bar's mirrored buttons then
+        // miss their next resize.
+        const panelAllocation = this._panel.get_allocation_box();
         // Modal overlays may suppress leave-event; reconcile hover each frame.
         this._syncForwardedHover();
         const glass = this._glass;
@@ -477,13 +505,19 @@ export class TopBarManager {
             glass.show();
         glass.opacity = Math.round(panelBox.opacity * panel.opacity / 255);
         const [x, y] = panelBox.get_transformed_position();
-        const width = Math.round(panelBox.width);
-        const height = Math.round(panel.height);
+        const width = Math.round(panelBox.allocation.get_width());
+        const height = Math.round(panelAllocation.get_height());
         if (!Number.isFinite(x) || !Number.isFinite(y) || width < 1 || height < 1)
             return;
         const { top, bottom } = this._margin;
         const pillHeight = height - top - bottom;
-        const left = this._margin.left, right = width - this._margin.right;
+        let left = this._margin.left, right = width - this._margin.right;
+        if (this._style === 'center') {
+            const barWidth = this._fitCenteredWidth(width);
+            // Where panelBox puts the bar once it lays out this frame, so the glass does not lag a frame behind.
+            left += Math.floor((width - barWidth) / 2);
+            right = left - this._margin.left + barWidth - this._margin.right;
+        }
         const rects = [];
         const textAnimating = this._style === 'islands' && this._text.isAnimating();
         if (textAnimating)
@@ -491,7 +525,7 @@ export class TopBarManager {
         else if (this._islandGeometryHoldFrames > 0)
             this._islandGeometryHoldFrames--;
         const holdIslandGeometry = textAnimating || this._islandGeometryHoldFrames > 0;
-        if (this._style === 'pill') {
+        if (this._style === 'pill' || this._style === 'center') {
             rects.push([left, top, right - left, pillHeight]);
         }
         else if (holdIslandGeometry && this._lastIslandRects.length > 0) {
@@ -522,7 +556,7 @@ export class TopBarManager {
             glass.set_size(width, height + SHADOW_ROOM);
             glass.setResolution(width, height + SHADOW_ROOM);
             const p = SHADER_PADDING;
-            if (this._style === 'pill') {
+            if (this._style !== 'islands') {
                 const [rx, ry, rw, rh] = rects[0];
                 glass.setGlassGeometry(rx - p, ry - p, rw + p * 2, rh + p * 2);
             }
@@ -536,6 +570,24 @@ export class TopBarManager {
             this._text.invalidate();
         }
         glass.syncSources();
+    }
+
+    _fitCenteredWidth(maxWidth) {
+        const panel = this._panel;
+        const natural = (box) => box.get_preferred_width(-1)[1];
+        // Panel adds the work area's offset when it centers its middle box, as for a dock fixed to a side.
+        const monitor = Main.layoutManager.findMonitorForActor(panel);
+        let centerOffset = 0;
+        if (monitor) {
+            const workArea = Main.layoutManager.getWorkAreaForMonitor(monitor.index);
+            centerOffset = 2 * (workArea.x - monitor.x) + workArea.width - monitor.width;
+        }
+        const barWidth = Math.min(maxWidth, centeredBarWidth(natural(panel._leftBox), natural(panel._centerBox), natural(panel._rightBox), centerOffset));
+        if (barWidth !== this._centeredWidth) {
+            this._centeredWidth = barWidth;
+            panel.width = barWidth;
+        }
+        return barWidth;
     }
 
     _remove() {
@@ -554,6 +606,13 @@ export class TopBarManager {
         if (this._panelStyleId)
             this._panel.disconnect(this._panelStyleId);
         this._panelStyleId = 0;
+        if (this._style === 'center') {
+            this._panel.width = -1;
+            this._panel.x_align = this._savedXAlign;
+            this._centeredWidth = 0;
+            if (this._owner === 'top-bar')
+                Main.panel.statusArea.quickSettings.menu._arrowAlignment = this._savedQuickSettingsAlignment;
+        }
         for (const [actor, style] of this._savedStyles)
             if (isActorValid(actor))
                 actor.set_style(style);

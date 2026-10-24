@@ -162,6 +162,9 @@ export class UIManager {
   private _enableAnimation: boolean;
   private _growFromButton: boolean = true;
   private _morph: MenuMorph | null = null;
+  // Multi Monitors Bar opens a shared menu from its own bar's button and hands the menu back to the main bar's
+  // button as it closes, so the glass closes into the button it opened from.
+  private _openedFrom: Clutter.Actor | null = null;
   private _morphTickId: number = 0;
   private _morphSpeed: number = 1.0;
 
@@ -229,6 +232,7 @@ export class UIManager {
     this._isEffectActive = false;
 
     this._animSignalId = this.menu.connect('open-state-changed', (menu: any, isOpen: boolean) => {
+      if (isOpen) this._openedFrom = this.menu.sourceActor;
       if (!this._isEffectActive) return;
       if (isOpen) {
         this._applyMenuScale();
@@ -1396,7 +1400,8 @@ export class UIManager {
   // when it is not on screen. Panel buttons draw it inside a transparent
   // border, and the clock on its label rather than on the whole button.
   private _buttonRect(): number[] | null {
-    const source = this.menu?.sourceActor;
+    const opener = this._openedFrom;
+    const source = opener && isActorValid(opener) && opener.mapped ? opener : this.menu?.sourceActor;
     if (!source || !isActorValid(source) || !source.mapped) return null;
     const label = (source as any)._clockDisplay;
     const actor: St.Widget = label instanceof St.Widget && label.mapped ? label : source;

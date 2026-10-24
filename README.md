@@ -20,7 +20,7 @@ I love the look of Apple's Liquid Glass, but since I don't own any Apple product
 
 ![Liquid Glass Overview Screenshot](assets/whole.png)
 
-Top Bar (one pill / three pills, off by default):
+Top Bar (one pill / three pills / centered pill, off by default):
 
 ![Top Bar One Pill Screenshot](assets/topbar-one-pill.png)
 
@@ -117,7 +117,7 @@ The effect can be enabled or disabled per UI element on the **Effects** page. In
 
 | Element | Notes / Special features |
 | --- | --- |
-| **Top Bar** | The bar itself, as **one pill** across the screen or **three pills** behind its groups of buttons (activities, clock, status icons), chosen on the Effects page (Appearance → Top bar in the Advanced view). The space around the pills (**margin**) and between their edges and the buttons (**padding**) can be set per side in the Advanced view; the bar grows to make room, and maximized windows stay below it. The top bars that other extensions add on further monitors, such as [Multi Monitors Bar](https://github.com/FrederykAbryan/multi-monitors-bar_fapv2)'s, get the same glass with the same settings, unless they run along a side of the screen. Off by default. Supports **adaptive text coloring**. |
+| **Top Bar** | The bar itself, as **one pill** across the screen, **three pills** behind its groups of buttons (activities, clock, status icons), or a **centered pill**: the bar shrinks to its buttons and sits in the middle of the screen, like a dock at the top, with Quick Settings opening centered under its button. The centered pill keeps the clock group in the middle, so when one side has more buttons than the other it leaves room on the shorter side. Chosen on the Effects page (Appearance → Top bar in the Advanced view). The space around the pills (**margin**) and between their edges and the buttons (**padding**) can be set per side in the Advanced view; the bar grows to make room, and maximized windows stay below it. The top bars that other extensions add on further monitors, such as [Multi Monitors Bar](https://github.com/FrederykAbryan/multi-monitors-bar_fapv2)'s, get the same glass with the same settings, unless they run along a side of the screen. Off by default. Supports **adaptive text coloring**. |
 | **Dock** | Glass behind the dock of the Dash to Dock / Ubuntu Dock extension or of [Dhruva](https://github.com/narkagni/dhruva). With Dash to Dock, a bottom margin control lets the dock float above the screen edge; Dhruva keeps its own margin setting. The glass follows Dhruva's dock as it widens under the pointer while the icons are magnified. |
 | **Application Icons** | The icons in Dash to Dock (the Show Apps button too) or Dhruva, in the launcher's results and in the overview's app grid, redrawn as glass plates under a one-color symbol, as in macOS 26 and iOS 26. See [Glass Icons](#glass-icons). Off by default. |
 | **Calendar & Other Top Bar Menus** | Glass behind the calendar (clock) menu and behind the menus of the other top bar indicators — the keyboard layout and accessibility menus, and the indicators other extensions add, including [ArcMenu](https://gitlab.com/arcmenu/ArcMenu)'s menu and its right-click menu. The calendar menus of the top bars other extensions add on further monitors, such as [Multi Monitors Bar](https://github.com/FrederykAbryan/multi-monitors-bar_fapv2)'s, get the same glass and follow the calendar menu's settings. The calendar menu's cards (messages, events, world clocks) follow the colour scheme in GNOME Settings: dark under Dark, pale under Default, with the text colours set to match. Each detected menu can be switched off on its own. Menus **grow out of their button**, after [liquid-dom](https://github.com/AndrewPrifer/liquid-dom)'s menu demo: the button's highlight drops out of the button and rounds off into a drop of glass, which is thrown out to where the menu will be — each time with a small push in a random downward direction — and swells into the menu, its items coming up through the glass, seen bent by its rim at first. Closing runs it back: the menu shrinks into a drop that rises into the button, widening into its highlight on the way, and fades once it has become the highlight. On by default (Appearance → Behavior → "Menus grow from their button"). With that off, a **custom spring animation** (stiffness / damping / mass) scales the menu instead. Also supports **adaptive text coloring**. |
@@ -320,6 +320,7 @@ A significant part of this codebase was written with the help of AI coding assis
 - [x] Export and import the settings, set the launcher's size and its pinned icons' size, scroll its results, mark applications that are not installed, and keep desktop widgets in a stack when their content changes
 - [x] Outline for the glass of each element, and settings that fold away under their switch in the advanced preferences
 - [x] Add Dhruva dock support, an opening animation for Quick Settings' Individual buttons mode, and an override for Blur my Shell's blur where there is glass
+- [x] Centered top bar pill that shrinks the bar to its buttons
 
 ### Next
 - [ ] Publish to extensions.gnome.org

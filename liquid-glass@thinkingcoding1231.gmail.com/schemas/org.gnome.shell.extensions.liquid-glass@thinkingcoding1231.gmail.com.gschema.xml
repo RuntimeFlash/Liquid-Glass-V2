@@ -844,7 +844,7 @@
     <key name="top-bar-style" type="s">
       <default>"off"</default>
       <summary>Top bar glass</summary>
-      <description>"off" keeps the top bar as the theme draws it, "pill" puts one glass pill across it, "islands" puts a pill behind each of its three groups of buttons.</description>
+      <description>"off" keeps the top bar as the theme draws it, "pill" puts one glass pill across it, "islands" puts a pill behind each of its three groups of buttons, "center" shrinks the bar to its buttons in the middle of the screen behind one pill.</description>
     </key>
     <key name="top-bar-tint-color" type="s">
       <default>"#ffffff"</default>

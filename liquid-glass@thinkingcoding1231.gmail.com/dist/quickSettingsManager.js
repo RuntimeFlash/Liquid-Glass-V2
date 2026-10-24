@@ -136,6 +136,9 @@ export class QuickSettingsManager {
     _toggleAnimation = false;
     _growFromButton = true;
     _morph = null;
+    // Multi Monitors Bar opens this menu from its own bar's button and hands it back to the main bar's button as it
+    // closes, so the glass closes into the button it opened from.
+    _openedFrom = null;
     _morphTickId = 0;
     _morphSpeed = 1.0;
     _tickId;
@@ -482,6 +485,7 @@ export class QuickSettingsManager {
         this._signals = [];
         this._animSignalId = this.menu.connect('open-state-changed', (menu, isOpen) => {
             if (isOpen) {
+                this._openedFrom = this.menu.sourceActor;
                 this._forgetSubmenus();
                 this._applyClassStyles();
                 this._applyMenuOffsets();
@@ -606,6 +610,7 @@ export class QuickSettingsManager {
         // closes with the shell's own animation.
         this._animSignalId = this.menu.connect('open-state-changed', (menu, isOpen) => {
             if (isOpen) {
+                this._openedFrom = this.menu.sourceActor;
                 this._forgetSubmenus();
                 this._startIntro();
                 startFrameSync();
@@ -1569,7 +1574,9 @@ export class QuickSettingsManager {
     }
 
     _buttonRect() {
-        const source = this.menu?.sourceActor ?? Main.panel.statusArea.quickSettings;
+        const opener = this._openedFrom;
+        const source = opener && isActorValid(opener) && opener.mapped
+            ? opener : this.menu?.sourceActor ?? Main.panel.statusArea.quickSettings;
         if (!source || !isActorValid(source) || !source.mapped)
             return null;
         const actor = source;

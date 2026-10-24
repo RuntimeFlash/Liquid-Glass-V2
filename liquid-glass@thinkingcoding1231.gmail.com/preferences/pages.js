@@ -52,6 +52,7 @@ const TOP_BAR = [
   { title: 'Off', patch: { 'top-bar-style': 'off' } },
   { title: 'One pill', patch: { 'top-bar-style': 'pill' } },
   { title: 'Three pills', patch: { 'top-bar-style': 'islands' } },
+  { title: 'Centered pill', patch: { 'top-bar-style': 'center' } },
 ];
 
 const QUICK_SETTINGS_GLASS = [

@@ -3409,7 +3409,7 @@ export default class LgDriver extends Extension {
       await shot('clock-alone', [x, y, w, h]);
     }
     if (parts.includes('topbar')) {
-      for (const style of ['pill', 'islands']) {
+      for (const style of ['pill', 'islands', 'center']) {
         settings.set_string('top-bar-style', style);
         await sleep(1500);
         await shot(`topbar-${style}`, [m.x, m.y, m.width, 80]);
