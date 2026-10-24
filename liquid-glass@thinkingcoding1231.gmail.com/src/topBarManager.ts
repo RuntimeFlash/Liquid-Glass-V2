@@ -374,7 +374,7 @@ export class TopBarManager {
       for (const [actor, original] of this._savedStyles) {
         if (actor === panel) {
           // Inline styles win over the stylesheet's transparent background, and Multi Monitors Bar
-          // colours its bars with one.
+          // colors its bars with one.
           actor.set_style(withOwn(original, `height: ${totalHeight}px; min-height: ${totalHeight}px; padding-top: 0px; ` +
             'padding-bottom: 0px; background-color: transparent !important;'));
           continue;
@@ -582,7 +582,7 @@ export class ExtraTopBarManager {
   private _idleId = 0;
   private _attached = 0;
 
-  constructor(private _path: string, private _settings: Gio.Settings, private _logger: Logger) {}
+  constructor(private _path: string, private _settings: Gio.Settings, private _logger: Logger) { }
 
   setup() {
     const uiGroup = Main.layoutManager.uiGroup;
