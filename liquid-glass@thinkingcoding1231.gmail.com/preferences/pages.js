@@ -6,7 +6,7 @@ import Gtk from 'gi://Gtk';
 import Pango from 'gi://Pango';
 import Soup from 'gi://Soup?version=3.0';
 
-import { BUNDLED_FAMILIES } from '../dist/desktop/bundledFonts.js';
+import { BUNDLED_FAMILIES } from '../dist/desktop/fonts.js';
 import { PreferenceControls, Branch, ToggleBranch, uniformPatch, dumpSettings, parseSettings } from './controls.js';
 import { IconStyleRules, WindowRules } from './apps.js';
 
@@ -52,6 +52,7 @@ const TOP_BAR = [
   { title: 'Off', patch: { 'top-bar-style': 'off' } },
   { title: 'One pill', patch: { 'top-bar-style': 'pill' } },
   { title: 'Three pills', patch: { 'top-bar-style': 'islands' } },
+  { title: 'Centered pill', patch: { 'top-bar-style': 'center' } },
 ];
 
 const QUICK_SETTINGS_GLASS = [
@@ -655,6 +656,12 @@ function addWidgets(page, controls) {
   });
 }
 
+function addWorkspaces(page, controls) {
+  const group = controls.group(page, 'Workspaces');
+  controls.toggle(group, 'Only on the first workspace', 'desktop-items-first-workspace-only',
+    'The clock and the widgets slide away with it when you switch to another workspace');
+}
+
 function addLauncher(page, controls) {
   const group = controls.group(page, 'Launcher',
     'A search field on glass, with the same results as the overview\'s search.');
@@ -930,6 +937,7 @@ export function buildPreferences(window, settings) {
 
   addClock(desktop, controls);
   addWidgets(desktop, controls);
+  addWorkspaces(desktop, controls);
   addLauncher(desktop, controls);
 
   const effectsTail = collectGroups(effects, () => {

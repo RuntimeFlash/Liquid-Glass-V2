@@ -1,20 +1,18 @@
-import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import St from 'gi://St';
+import GLib from 'gi://GLib';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import { BackdropGlass } from './rendering/backdropGlass.js';
 import type { GlassRegion } from './rendering/glassRenderer.js';
-import { ensureGlassAllocated } from './actors/allocation.js';
-import { isActorValid } from './actors/lifecycle.js';
-import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
-import { hexToColorArray } from './animation/colors.js';
-import { sanitizeColorPreference } from './contrastSampler.js';
-import { AdaptiveTextColor } from './adaptiveText.js';
+import { ensureGlassAllocated, isActorValid } from './actors.js';
+import { startSyncLoop, stopStageLoop, hexToColorArray } from './animation.js';
+import { sanitizeColorPreference, AdaptiveTextColor } from './contrastSampler.js';
 import type { Logger } from './logger.js';
 
-export type TopBarStyle = 'off' | 'pill' | 'islands';
+export type TopBarStyle = 'off' | 'pill' | 'islands' | 'center';
 
 // Extra space for shader edge effects.
 const SHADER_PADDING = 20;
@@ -22,9 +20,19 @@ const SHADER_PADDING = 20;
 const SHADOW_ROOM = 48;
 const SIDES = ['top', 'bottom', 'left', 'right'] as const;
 type Insets = Record<typeof SIDES[number], number>;
+// PopupMenu keeps the alignment it hands its box pointer on open in a field the shell's typings leave out.
+type ArrowAlignedMenu = { _arrowAlignment: number };
 
 function sanitizeStyle(value: string): TopBarStyle {
-  return value === 'pill' || value === 'islands' ? value : 'off';
+  return value === 'pill' || value === 'islands' || value === 'center' ? value : 'off';
+}
+
+/**
+ * Width at which the shell's Panel fits its boxes at their natural widths. It puts the center box in the
+ * middle and gives both sides the same room, shifted by the work area's offset when a dock is fixed to a side.
+ */
+export function centeredBarWidth(left: number, center: number, right: number, centerOffset: number): number {
+  return Math.ceil(center + 2 * Math.max(left, right) + Math.abs(centerOffset));
 }
 
 /** The shell's top bar, or one that another extension builds the same way for a further monitor. */
@@ -36,7 +44,7 @@ export interface TopBarPanel extends St.Widget {
   _centerBin?: St.BoxLayout;
 }
 
-/** Glass behind the top bar: one pill or separate islands for its three button groups. */
+/** Glass behind the top bar: one pill, separate islands for its three button groups, or one pill the bar shrinks to. */
 export class TopBarManager {
   private _style: TopBarStyle = 'off';
   private _glass: BackdropGlass | null = null;
@@ -59,6 +67,10 @@ export class TopBarManager {
   private _forwardedPresses = new Map<St.Widget, { touch: boolean, native: boolean }>();
   private _stagePointerSignalId = 0;
   private _applyingLayout = false;
+  // The bar's width while the centered style shrinks it, and what it replaced on the bar and quick settings.
+  private _centeredWidth = 0;
+  private _savedXAlign: Clutter.ActorAlign = 0;
+  private _savedQuickSettingsAlignment = 0;
 
   constructor(private _path: string, private _settings: Gio.Settings, private _logger: Logger,
     // The panel's boxes are not part of the shell's typings.
@@ -120,6 +132,18 @@ export class TopBarManager {
     const styled = new Set<St.Widget>([panel, panel._leftBox, panel._centerBox, ...this._sections()]);
     this._savedStyles = [...styled].map(actor => [actor, actor.get_style()]);
     this._childrenStyles = [];
+    if (this._style === 'center') {
+      // panelBox keeps the monitor's width, so the bar stays above maximized windows.
+      this._savedXAlign = panel.x_align;
+      panel.x_align = Clutter.ActorAlign.CENTER;
+      // Quick settings opens from its button's left edge and counts on the screen edge to push it back, so in
+      // the middle of the screen it would hang past the bar. The other monitors' bars open this same menu.
+      if (this._owner === 'top-bar') {
+        const menu = Main.panel.statusArea.quickSettings.menu as unknown as ArrowAlignedMenu;
+        this._savedQuickSettingsAlignment = menu._arrowAlignment;
+        menu._arrowAlignment = 0.5;
+      }
+    }
     // Reapply layout when the theme changes the bar height.
     this._panelStyleId = panel.connect('style-changed', () => this._applyLayout());
     this._applyLayout();
@@ -376,7 +400,7 @@ export class TopBarManager {
       for (const [actor, original] of this._savedStyles) {
         if (actor === panel) {
           // Inline styles win over the stylesheet's transparent background, and Multi Monitors Bar
-          // colours its bars with one.
+          // colors its bars with one.
           actor.set_style(withOwn(original, `height: ${totalHeight}px; min-height: ${totalHeight}px; padding-top: 0px; ` +
             'padding-bottom: 0px; background-color: transparent !important;'));
           continue;
@@ -454,6 +478,10 @@ export class TopBarManager {
 
   // Sync the glass beneath the panel, hiding it with the bar.
   private _sync(): void {
+    // Lays the stage out now if this bar waits for it, so the reads below see allocations. On a bar queued for
+    // relayout, size getters re-measure part of its tree mid-frame, and Multi Monitors Bar's mirrored buttons then
+    // miss their next resize.
+    const panelAllocation = this._panel.get_allocation_box();
     // Modal overlays may suppress leave-event; reconcile hover each frame.
     this._syncForwardedHover();
     const glass = this._glass!;
@@ -468,19 +496,25 @@ export class TopBarManager {
     glass.opacity = Math.round(panelBox.opacity * panel.opacity / 255);
 
     const [x, y] = panelBox.get_transformed_position();
-    const width = Math.round(panelBox.width);
-    const height = Math.round(panel.height);
+    const width = Math.round(panelBox.allocation.get_width());
+    const height = Math.round(panelAllocation.get_height());
     if (!Number.isFinite(x) || !Number.isFinite(y) || width < 1 || height < 1) return;
 
     const { top, bottom } = this._margin;
     const pillHeight = height - top - bottom;
-    const left = this._margin.left, right = width - this._margin.right;
+    let left = this._margin.left, right = width - this._margin.right;
+    if (this._style === 'center') {
+      const barWidth = this._fitCenteredWidth(width);
+      // Where panelBox puts the bar once it lays out this frame, so the glass does not lag a frame behind.
+      left += Math.floor((width - barWidth) / 2);
+      right = left - this._margin.left + barWidth - this._margin.right;
+    }
     const rects: number[][] = [];
     const textAnimating = this._style === 'islands' && this._text.isAnimating();
     if (textAnimating) this._islandGeometryHoldFrames = 4;
     else if (this._islandGeometryHoldFrames > 0) this._islandGeometryHoldFrames--;
     const holdIslandGeometry = textAnimating || this._islandGeometryHoldFrames > 0;
-    if (this._style === 'pill') {
+    if (this._style === 'pill' || this._style === 'center') {
       rects.push([left, top, right - left, pillHeight]);
     } else if (holdIslandGeometry && this._lastIslandRects.length > 0) {
       // Text tweens can briefly disturb allocations; hold island geometry steady until they settle.
@@ -507,7 +541,7 @@ export class TopBarManager {
       glass.set_size(width, height + SHADOW_ROOM);
       glass.setResolution(width, height + SHADOW_ROOM);
       const p = SHADER_PADDING;
-      if (this._style === 'pill') {
+      if (this._style !== 'islands') {
         const [rx, ry, rw, rh] = rects[0];
         glass.setGlassGeometry(rx - p, ry - p, rw + p * 2, rh + p * 2);
       } else {
@@ -520,6 +554,25 @@ export class TopBarManager {
       this._text.invalidate();
     }
     glass.syncSources();
+  }
+
+  private _fitCenteredWidth(maxWidth: number): number {
+    const panel = this._panel;
+    const natural = (box: St.Widget) => box.get_preferred_width(-1)[1];
+    // Panel adds the work area's offset when it centers its middle box, as for a dock fixed to a side.
+    const monitor = Main.layoutManager.findMonitorForActor(panel);
+    let centerOffset = 0;
+    if (monitor) {
+      const workArea = Main.layoutManager.getWorkAreaForMonitor(monitor.index);
+      centerOffset = 2 * (workArea.x - monitor.x) + workArea.width - monitor.width;
+    }
+    const barWidth = Math.min(maxWidth,
+      centeredBarWidth(natural(panel._leftBox), natural(panel._centerBox), natural(panel._rightBox), centerOffset));
+    if (barWidth !== this._centeredWidth) {
+      this._centeredWidth = barWidth;
+      panel.width = barWidth;
+    }
+    return barWidth;
   }
 
   private _remove(): void {
@@ -536,6 +589,13 @@ export class TopBarManager {
     }
     if (this._panelStyleId) this._panel.disconnect(this._panelStyleId);
     this._panelStyleId = 0;
+    if (this._style === 'center') {
+      this._panel.width = -1;
+      this._panel.x_align = this._savedXAlign;
+      this._centeredWidth = 0;
+      if (this._owner === 'top-bar')
+        (Main.panel.statusArea.quickSettings.menu as unknown as ArrowAlignedMenu)._arrowAlignment = this._savedQuickSettingsAlignment;
+    }
     for (const [actor, style] of this._savedStyles)
       if (isActorValid(actor)) actor.set_style(style);
     for (const [actor, style] of this._childrenStyles)
@@ -559,5 +619,129 @@ export class TopBarManager {
 
   private get _frameSignalSlot() {
     return { get: () => this._frameSignalId, set: (id: number) => { this._frameSignalId = id; } };
+  }
+}
+
+// Built like the shell's Panel, whose three boxes the glass follows.
+function isTopBar(actor: Clutter.Actor): actor is TopBarPanel {
+  return actor instanceof St.Widget
+    && '_leftBox' in actor && actor._leftBox instanceof St.BoxLayout
+    && '_centerBox' in actor && actor._centerBox instanceof St.BoxLayout
+    && '_rightBox' in actor && actor._rightBox instanceof St.BoxLayout;
+}
+
+/**
+ * Top bar glass for the bars other extensions put on further monitors, such as Multi Monitors Bar.
+ * Each bar sits in a box of its own in uiGroup and gets its own TopBarManager, which follows the
+ * top bar settings. Bars along a side of the screen are left alone: the glass is laid out for a
+ * horizontal bar.
+ */
+export class ExtraTopBarManager {
+  private _disconnects: (() => void)[] = [];
+  private _bars = new Map<TopBarPanel, TopBarManager>();
+  // Every bar found, side bars too: Multi Monitors Bar moves a bar back to the top by changing its style class only.
+  private _watched = new Map<TopBarPanel, number[]>();
+  private _idleId = 0;
+  private _attached = 0;
+
+  constructor(private _path: string, private _settings: Gio.Settings, private _logger: Logger) { }
+
+  setup() {
+    const uiGroup = Main.layoutManager.uiGroup;
+    // The shell's own signal emitters type their handlers as returning a stop flag.
+    const scan = () => {
+      this._scheduleScan();
+      return undefined;
+    };
+    // A bar's box is added to uiGroup before the bar is put in it; the scan waits for an idle.
+    for (const signal of ['child-added', 'child-removed'] as const) {
+      const id = uiGroup.connect(signal, scan);
+      this._disconnects.push(() => uiGroup.disconnect(id));
+    }
+    const monitorsId = Main.layoutManager.connect('monitors-changed', scan);
+    this._disconnects.push(() => Main.layoutManager.disconnect(monitorsId));
+    const extensionsId = Main.extensionManager.connect('extension-state-changed', scan);
+    this._disconnects.push(() => Main.extensionManager.disconnect(extensionsId));
+    // The shell destroys uiGroup on shutdown without disabling extensions; a scan queued by the
+    // removal of its children would run on disposed actors.
+    const destroyId = uiGroup.connect('destroy', () => this.cleanup());
+    this._disconnects.push(() => uiGroup.disconnect(destroyId));
+    this._scheduleScan();
+  }
+
+  private _scheduleScan() {
+    if (this._idleId) return;
+    this._idleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+      this._idleId = 0;
+      this._scan();
+      return GLib.SOURCE_REMOVE;
+    });
+  }
+
+  private _scan() {
+    const bars = new Set<TopBarPanel>();
+    const found = new Map<TopBarPanel, St.Widget>();
+    for (const box of Main.layoutManager.uiGroup.get_children()) {
+      if (box === Main.layoutManager.panelBox || !(box instanceof St.Widget)) continue;
+      for (const child of box.get_children()) {
+        if (!isTopBar(child)) continue;
+        bars.add(child);
+        if (!child.has_style_class_name('multimonitor-panel-vertical')) found.set(child, box);
+      }
+    }
+
+    for (const panel of [...this._bars.keys()])
+      if (!found.has(panel)) this._detach(panel);
+    for (const panel of [...this._watched.keys()])
+      if (!bars.has(panel)) this._unwatch(panel);
+    for (const panel of bars)
+      if (!this._watched.has(panel)) this._watch(panel);
+
+    for (const [panel, box] of found) {
+      if (this._bars.has(panel)) continue;
+      const manager = new TopBarManager(this._path, this._settings, this._logger, panel, box, `top-bar:${++this._attached}`);
+      // These bars belong to other extensions and may not be built the way TopBarManager expects.
+      try {
+        manager.setup();
+      } catch (e) {
+        manager.cleanup();
+        this._logger.log(`[Liquid Glass] Could not attach glass to another top bar: ${e}`);
+        continue;
+      }
+      this._bars.set(panel, manager);
+    }
+  }
+
+  private _watch(panel: TopBarPanel) {
+    // The glass and the styles must go while the bar's actors still exist.
+    const destroyId = panel.connect('destroy', () => this._unwatch(panel));
+    // Multi Monitors Bar marks a bar it moves to a side of the screen.
+    const styleId = panel.connect('notify::style-class', () => this._scheduleScan());
+    this._watched.set(panel, [destroyId, styleId]);
+  }
+
+  private _unwatch(panel: TopBarPanel) {
+    this._detach(panel);
+    for (const id of this._watched.get(panel) ?? []) panel.disconnect(id);
+    this._watched.delete(panel);
+  }
+
+  private _detach(panel: TopBarPanel) {
+    const manager = this._bars.get(panel);
+    if (!manager) return;
+    this._bars.delete(panel);
+    manager.cleanup();
+  }
+
+  cleanup() {
+    if (this._idleId) {
+      GLib.Source.remove(this._idleId);
+      this._idleId = 0;
+    }
+
+    for (const disconnect of this._disconnects) disconnect();
+    this._disconnects = [];
+
+    for (const panel of [...this._watched.keys()]) this._unwatch(panel);
   }
 }

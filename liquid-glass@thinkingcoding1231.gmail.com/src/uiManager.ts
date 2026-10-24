@@ -1,7 +1,8 @@
-import { stepMenuSpring, applyMenuFrame, showMenuAtRest } from './animation/menuSpring.js';
-import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
-import { Spring, SwiftSpring } from './animation/spring.js';
-import { MenuMorphMotion, type MorphFrame } from './animation/menuMorph.js';
+import {
+  stepMenuSpring, applyMenuFrame, showMenuAtRest, Spring, SwiftSpring, addFrameTicker, removeFrameTicker,
+  normalizeAnimationIntervalMs, startSyncLoop, stopStageLoop, MenuMorphMotion, type MorphFrame,
+  resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex
+} from './animation.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
@@ -9,15 +10,12 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Gio from 'gi://Gio';
 import { BackdropGlass } from './rendering/backdropGlass.js';
-import { ContentLens } from './rendering/contentLens.js';
+import { ContentLens } from './rendering/pipelines.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
-import { UnpickableWidget } from './actors/unpickable.js';
-import { ensureGlassAllocated } from './actors/allocation.js';
-import { resolveMonitorGeometry, getAllocatedSize } from './actors/geometry.js';
-import { isActorValid } from './actors/lifecycle.js';
-import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
-import { placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS } from './actors/glassBounds.js';
-import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex } from './animation/colors.js';
+import {
+  UnpickableWidget, ensureGlassAllocated, resolveMonitorGeometry, getAllocatedSize, isActorValid,
+  placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS
+} from './actors.js';
 
 import { MENU_NO_ANIMATION, accentColors } from './shellVersion.js';
 import { Logger } from './logger.js';
@@ -164,6 +162,9 @@ export class UIManager {
   private _enableAnimation: boolean;
   private _growFromButton: boolean = true;
   private _morph: MenuMorph | null = null;
+  // Multi Monitors Bar opens a shared menu from its own bar's button and hands the menu back to the main bar's
+  // button as it closes, so the glass closes into the button it opened from.
+  private _openedFrom: Clutter.Actor | null = null;
   private _morphTickId: number = 0;
   private _morphSpeed: number = 1.0;
 
@@ -231,6 +232,7 @@ export class UIManager {
     this._isEffectActive = false;
 
     this._animSignalId = this.menu.connect('open-state-changed', (menu: any, isOpen: boolean) => {
+      if (isOpen) this._openedFrom = this.menu.sourceActor;
       if (!this._isEffectActive) return;
       if (isOpen) {
         this._applyMenuScale();
@@ -1398,7 +1400,8 @@ export class UIManager {
   // when it is not on screen. Panel buttons draw it inside a transparent
   // border, and the clock on its label rather than on the whole button.
   private _buttonRect(): number[] | null {
-    const source = this.menu?.sourceActor;
+    const opener = this._openedFrom;
+    const source = opener && isActorValid(opener) && opener.mapped ? opener : this.menu?.sourceActor;
     if (!source || !isActorValid(source) || !source.mapped) return null;
     const label = (source as any)._clockDisplay;
     const actor: St.Widget = label instanceof St.Widget && label.mapped ? label : source;
@@ -1729,6 +1732,7 @@ export class UIManager {
       this.menu.disconnect(this._animSignalId);
       this._animSignalId = 0;
     }
+    this._openedFrom = null;
     if (this._destroySignalId) {
       this.targetActor.disconnect(this._destroySignalId);
       this._destroySignalId = 0;

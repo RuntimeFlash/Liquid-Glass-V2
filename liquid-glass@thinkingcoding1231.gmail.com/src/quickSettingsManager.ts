@@ -1,27 +1,23 @@
-import { ToggleStyles } from './quickSettings/toggleStyles.js';
-import { stepMenuSpring, applyMenuFrame, showMenuAtRest } from './animation/menuSpring.js';
-import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
-import { Spring } from './animation/spring.js';
-import { MenuMorphMotion, type MorphFrame } from './animation/menuMorph.js';
-import { ToggleIntro } from './animation/toggleIntro.js';
+import { ToggleStyles, ToggleBackdropGlass } from './quickSettingsToggles.js';
+import {
+  stepMenuSpring, applyMenuFrame, showMenuAtRest, Spring, addFrameTicker, removeFrameTicker,
+  normalizeAnimationIntervalMs, startSyncLoop, stopStageLoop, MenuMorphMotion, type MorphFrame, ToggleIntro,
+  resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb
+} from './animation.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import { BackdropGlass } from './rendering/backdropGlass.js';
-import { ContentLens } from './rendering/contentLens.js';
-import { ToggleBackdropGlass } from './rendering/toggleGlass.js';
+import { ContentLens } from './rendering/pipelines.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import Gio from 'gi://Gio';
-import { LayoutOpaqueActor } from './actors/unpickable.js';
-import { ensureGlassAllocated } from './actors/allocation.js';
-import { isActorValid } from './actors/lifecycle.js';
-import { resolveMonitorGeometry, getAllocatedSize, getTransformedRect } from './actors/geometry.js';
-import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
-import { placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS } from './actors/glassBounds.js';
-import { setPositionIfChanged, setScaleIfChanged } from './actors/writes.js';
-import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb } from './animation/colors.js';
+import {
+  LayoutOpaqueActor, ensureGlassAllocated, isActorValid, resolveMonitorGeometry, getAllocatedSize,
+  getTransformedRect, placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS,
+  setPositionIfChanged, setScaleIfChanged
+} from './actors.js';
 
 import { MENU_NO_ANIMATION } from './shellVersion.js';
 import { Logger } from './logger.js';
@@ -121,7 +117,7 @@ function _findSubmenuGap(n: Clutter.Actor, submenu: Clutter.Actor, root: Clutter
   for (let child of n.get_children()) _findSubmenuGap(child, submenu, root, gap);
 }
 
-// Toggle mode's opening (see animation/toggleIntro.ts). The buttons are moved
+// Toggle mode's opening (see ToggleIntro in animation.ts). The buttons are moved
 // with transforms, which their glass follows; `rest` is each one's rect in the
 // menu box as laid out, and `saved` what the animation changes on it.
 interface ToggleIntroState {
@@ -159,7 +155,7 @@ export class QuickSettingsManager {
 
   // Monitor-sized. In toggle mode it sits inside the menu, which is drawn
   // through an offscreen, and reads the stage through a reader outside the
-  // menu (see rendering/toggleGlass.ts).
+  // menu (see quickSettingsToggles.ts).
   private glass: BackdropGlass | ToggleBackdropGlass | null;
 
   // Toggle mode. The menu's ancestor that is a direct child of uiGroup, and
@@ -201,6 +197,9 @@ export class QuickSettingsManager {
 
   private _growFromButton: boolean = true;
   private _morph: MenuMorph | null = null;
+  // Multi Monitors Bar opens this menu from its own bar's button and hands it back to the main bar's button as it
+  // closes, so the glass closes into the button it opened from.
+  private _openedFrom: Clutter.Actor | null = null;
   private _morphTickId: number = 0;
   private _morphSpeed: number = 1.0;
 
@@ -226,8 +225,6 @@ export class QuickSettingsManager {
 
   private _stableBaseW: number | undefined;
   private _stableBaseH: number | undefined;
-  private _lastValidAnimAbsX: number | undefined;
-  private _lastValidAnimAbsY: number | undefined;
   private _lastBgW: number | undefined;
   private _lastBoundsSpace: 'toggles' | 'panel' | undefined;
   private _lastHostX: number | undefined;
@@ -603,6 +600,7 @@ export class QuickSettingsManager {
 
     this._animSignalId = this.menu.connect('open-state-changed', (menu, isOpen: boolean) => {
       if (isOpen) {
+        this._openedFrom = this.menu.sourceActor;
         this._forgetSubmenus();
 
         this._applyClassStyles();
@@ -715,11 +713,11 @@ export class QuickSettingsManager {
     else
       Main.layoutManager.uiGroup.add_child(glass.reader);
 
-    let blurRadius = this._settings.get_int('quick-settings-blur-radius');
-    let tintStrength = this._settings.get_double('quick-settings-tint-strength');
-    let brightness = this._settings.get_double('quick-settings-brightness');
-    let saturation = this._settings.get_double('quick-settings-saturation');
-    let contrast = this._settings.get_double('quick-settings-contrast');
+    const blurRadius = this._settings.get_int('quick-settings-blur-radius');
+    const tintStrength = this._settings.get_double('quick-settings-tint-strength');
+    const brightness = this._settings.get_double('quick-settings-brightness');
+    const saturation = this._settings.get_double('quick-settings-saturation');
+    const contrast = this._settings.get_double('quick-settings-contrast');
 
     glass.setPadding(SHADER_PADDING);
     this._tintColorArray = hexToColorArray(this._settings.get_string('quick-settings-tint-color'));
@@ -745,6 +743,7 @@ export class QuickSettingsManager {
     // closes with the shell's own animation.
     this._animSignalId = this.menu.connect('open-state-changed', (menu, isOpen: boolean) => {
       if (isOpen) {
+        this._openedFrom = this.menu.sourceActor;
         this._forgetSubmenus();
         this._startIntro();
         startFrameSync();
@@ -1716,7 +1715,9 @@ export class QuickSettingsManager {
   }
 
   private _buttonRect(): number[] | null {
-    const source = this.menu?.sourceActor ?? Main.panel.statusArea.quickSettings;
+    const opener = this._openedFrom;
+    const source = opener && isActorValid(opener) && opener.mapped
+      ? opener : this.menu?.sourceActor ?? Main.panel.statusArea.quickSettings;
     if (!source || !isActorValid(source) || !source.mapped) return null;
     const actor: St.Widget = source as St.Widget;
     const [x, y] = actor.get_transformed_position();
@@ -2009,6 +2010,7 @@ export class QuickSettingsManager {
       this.menu.disconnect(this._animSignalId);
       this._animSignalId = 0;
     }
+    this._openedFrom = null;
 
     if (this._tickId !== 0) {
       removeFrameTicker(this._tickId);
