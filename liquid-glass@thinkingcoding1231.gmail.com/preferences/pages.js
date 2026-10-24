@@ -656,6 +656,12 @@ function addWidgets(page, controls) {
   });
 }
 
+function addWorkspaces(page, controls) {
+  const group = controls.group(page, 'Workspaces');
+  controls.toggle(group, 'Only on the first workspace', 'desktop-items-first-workspace-only',
+    'The clock and the widgets slide away with it when you switch to another workspace');
+}
+
 function addLauncher(page, controls) {
   const group = controls.group(page, 'Launcher',
     'A search field on glass, with the same results as the overview\'s search.');
@@ -931,6 +937,7 @@ export function buildPreferences(window, settings) {
 
   addClock(desktop, controls);
   addWidgets(desktop, controls);
+  addWorkspaces(desktop, controls);
   addLauncher(desktop, controls);
 
   const effectsTail = collectGroups(effects, () => {

@@ -5,9 +5,10 @@ import St from 'gi://St';
 import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import { MonitorGroup } from 'resource:///org/gnome/shell/ui/workspaceAnimation.js';
 import { isActorValid } from '../actors.js';
 import { addBeforeRedraw, removeBeforeRedraw, startSyncLoop, stopStageLoop } from '../animation.js';
-import { MENU_ANIMATION, resetHoverCursor, setHoverCursor } from '../shellVersion.js';
+import { MENU_ANIMATION, canCloneSource, resetHoverCursor, setHoverCursor } from '../shellVersion.js';
 import { UIManager } from '../uiManager.js';
 import { WeatherWidget, EventsWidget, MediaWidget } from './widgets.js';
 import { parseAnchors, parsePositions, placeAtFraction, fractionOf, sanitizeAnchor, stackAt, stackColumns, snapMove, placeBeside, resizeRect } from './placement.js';
@@ -24,7 +25,7 @@ const ANCHOR_NAMES = [
  * sits at a corner or the center of the primary monitor's work area, stacked
  * with the others there, unless the user moved it somewhere else. A right
  * click on one opens its menu, from which it can be moved (and the clock
- * resized).
+ * resized). They can be kept to the first workspace.
  */
 export class DesktopLayer {
     _path;
@@ -63,6 +64,7 @@ export class DesktopLayer {
             watch(key, () => this._sync());
         for (const key of ['desktop-widgets-position', 'glass-clock-position', 'desktop-item-positions', 'desktop-widget-anchors'])
             watch(key, () => this._queueLayout());
+        watch('desktop-items-first-workspace-only', () => this._syncWorkspace());
         this._sync();
     }
 
@@ -125,6 +127,20 @@ export class DesktopLayer {
         this._signals.push({ target: Main.layoutManager, id: Main.layoutManager.connect('monitors-changed', relayout) });
         this._signals.push({ target: global.display, id: global.display.connect('workareas-changed', relayout) });
         this._signals.push({ target: Main.overview, id: Main.overview.connect('showing', () => this._edit?.end()) });
+        this._signals.push({
+            target: global.workspace_manager, id: global.workspace_manager.connect('active-workspace-changed', () => {
+                this._edit?.end();
+                this._syncWorkspace();
+            }),
+        });
+        // The workspace switch animation covers the desktop with pictures of the workspaces until it ends.
+        this._signals.push({ target: Main.uiGroup, id: Main.uiGroup.connect('child-added', (_group, actor) => this._addToSwitch(actor)) });
+        this._signals.push({
+            target: Main.uiGroup, id: Main.uiGroup.connect('child-removed', (_group, actor) => {
+                if (actor instanceof MonitorGroup)
+                    this._syncWorkspace();
+            }),
+        });
         // Mutter restacks the windows without telling; this runs before every
         // frame is drawn, so the items are back in place before anyone sees them.
         this._signals.push({ target: global.stage, id: global.stage.connect('before-update', () => this._restack()) });
@@ -142,6 +158,39 @@ export class DesktopLayer {
         this._menuManager.addMenu(menu);
         this._menuGlass = new UIManager(this._path, this._settings, this._logger, { menu }, false, 'enable-extra-menu-glass', 'panel-menu', 'menu:desktop', false, 'desktop-widget-menu-animation');
         this._menuGlass.setup();
+        this._syncWorkspace();
+    }
+
+    _firstWorkspaceOnly() {
+        return this._settings.get_boolean('desktop-items-first-workspace-only');
+    }
+
+    _syncWorkspace() {
+        if (this._container)
+            this._container.visible = !this._firstWorkspaceOnly() || global.workspace_manager.get_active_workspace_index() === 0;
+    }
+
+    // Puts a clone of the items on each workspace's wallpaper in the switch animation, so they move with it instead of
+    // disappearing under it. The clones draw their glass with the backdrop it last copied, which is the same wallpaper.
+    _addToSwitch(actor) {
+        const container = this._container;
+        if (!container || !(actor instanceof MonitorGroup) || !canCloneSource(container))
+            return;
+        const group = actor;
+        const firstOnly = this._firstWorkspaceOnly();
+        let cloned = false;
+        for (const { workspace, _background: background } of group._workspaceGroups) {
+            if (firstOnly && workspace.index() !== 0)
+                continue;
+            background.add_child(new Clutter.Clone({
+                source: container, x: -group._monitor.x, y: -group._monitor.y, width: container.width, height: container.height,
+            }));
+            cloned = true;
+        }
+        // A hidden source would be mapped and unmapped by every clone paint. The animation covers the items until it
+        // ends, and child-removed hides them again.
+        if (cloned)
+            container.show();
     }
 
     _removeContainer() {

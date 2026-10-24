@@ -24,7 +24,7 @@
 //              ($LG_DRV_WALLPAPER); LG_DRV_FEATURES picks parts (comma
 //              separated: morph, topbar, widgets, clock, launcher; default all;
 //              also morphtrace, qssub, clockshot, media, guides, launcherpointer,
-//              launchercolor, iconstyle, iconglass, fullshot, popupfreeze, redrawclip, prefshover, bannerintro, stalefreeze, dockgrow, nanrelay; fullshot to prefshover and the last three need LG_DTD_DIR; qsheight, the calendar matched
+//              launchercolor, iconstyle, iconglass, workspaces, fullshot, popupfreeze, redrawclip, prefshover, bannerintro, stalefreeze, dockgrow, nanrelay; fullshot to prefshover and the last three need LG_DTD_DIR; qsheight, the calendar matched
 //              to Quick Settings' height; qsflicker, the Quick Settings glass rect while adaptive colour samples;
 //              adaptiveoff, adaptive colour turned off and on while each surface is shown);
 //              also scale (the calendar, Quick Settings in both modes and the launcher
@@ -1583,6 +1583,46 @@ export default class LgDriver extends Extension {
         await sleep(wait);
       await shot(`${tag}-${t}`, rect);
     }
+  }
+
+  // The clock and the widgets in the workspace switch animation: copies of them on every workspace's
+  // wallpaper, or only on the first one's with desktop-items-first-workspace-only, and the real
+  // ones shown afterwards only where they belong.
+  async _workspaces(settings, m) {
+    new Gio.Settings({schema_id: 'org.gnome.mutter'}).set_boolean('dynamic-workspaces', false);
+    new Gio.Settings({schema_id: 'org.gnome.desktop.wm.preferences'}).set_int('num-workspaces', 3);
+    settings.set_string('desktop-item-positions', '{}');
+    settings.set_boolean('enable-glass-clock', true);
+    settings.set_strv('desktop-widgets', ['weather', 'events']);
+    settings.set_boolean('enable-desktop-widgets', true);
+    await sleep(4000);
+    const desktop = findActor(Main.layoutManager.uiGroup, 'liquid-glass-desktop');
+    const wm = global.workspace_manager;
+    const clones = () => findActors(Main.layoutManager.uiGroup, a => a instanceof Clutter.Clone && a.source === desktop);
+    St.Settings.get().slow_down_factor = 10;
+    for (const firstOnly of [false, true]) {
+      settings.set_boolean('desktop-items-first-workspace-only', firstOnly);
+      wm.get_workspace_by_index(0).activate(global.get_current_time());
+      await sleep(4000);
+      log(`workspaces: first-only=${firstOnly} start visible=${desktop.visible}`);
+      for (const to of [1, 2, 0]) {
+        const from = wm.get_active_workspace_index();
+        wm.get_workspace_by_index(to).activate(global.get_current_time());
+        await sleep(1200);
+        const midway = clones();
+        const on = midway.map(c => c.get_parent()?.get_parent()?.workspace?.index() ?? '?').join(',');
+        log(`workspaces: first-only=${firstOnly} ${from}->${to} midway clones=${midway.length} on=[${on}] ` +
+          `size=${midway[0]?.width ?? 0}x${midway[0]?.height ?? 0} visible=${desktop.visible}`);
+        await shot(`workspaces-${firstOnly ? 'first' : 'all'}-${from}-${to}-midway`, [m.x, m.y, m.width, m.height]);
+        await sleep(3500);
+        const want = !firstOnly || to === 0;
+        log(`workspaces: first-only=${firstOnly} ${from}->${to} after clones=${clones().length} visible=${desktop.visible} ` +
+          `${desktop.visible === want && clones().length === 0 ? 'OK' : 'NG'}`);
+        await shot(`workspaces-${firstOnly ? 'first' : 'all'}-${from}-${to}-after`, [m.x, m.y, m.width, m.height]);
+      }
+    }
+    St.Settings.get().slow_down_factor = 1;
+    settings.set_boolean('desktop-items-first-workspace-only', false);
   }
 
   // Moves the weather card through its menu until its centre is a few px
@@ -3488,6 +3528,8 @@ export default class LgDriver extends Extension {
       }
       await this._editClock(settings, m);
     }
+    if (parts.includes('workspaces'))
+      await this._workspaces(settings, m);
     if (parts.includes('launcherglass'))
       await this._launcherGlass(settings);
     if (parts.includes('clockcull'))
