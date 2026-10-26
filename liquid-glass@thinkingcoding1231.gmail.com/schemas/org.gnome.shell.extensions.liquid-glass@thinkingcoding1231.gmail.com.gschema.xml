@@ -506,6 +506,11 @@
       <summary>Saturation</summary>
       <description>Adjusts the saturation of the quick settings.</description>
     </key>
+    <key name="quick-settings-panel" type="s">
+      <default>"macos"</default>
+      <summary>Quick Settings panel</summary>
+      <description>"macos" replaces the panel with the fork's grid of glass cards, floating submenus and layout editor. "native" keeps GNOME's own Quick Settings and uses quick-settings-apply-to to choose the whole menu or individual buttons. Changing this applies on the next extension reload.</description>
+    </key>
     <key name="quick-settings-apply-to" type="i">
       <default>0</default>
       <summary>Apply glass effect to</summary>
@@ -520,6 +525,16 @@
       <default>18.0</default>
       <summary>Toggle corner radius</summary>
       <description>Corner radius applied to each individual toggle's glass shape. Only used when quick-settings-apply-to is Toggles.</description>
+    </key>
+    <key name="quick-settings-open-scale" type="d">
+      <default>1.08</default>
+      <summary>Quick settings open stamp scale</summary>
+      <description>Starting scale of the custom open animation, settling to 1.0. Only used when quick-settings-panel is macos.</description>
+    </key>
+    <key name="quick-settings-layout" type="s">
+      <default>'{"version":3,"items":[{"key":"network","span":2},{"key":"night","span":1},{"key":"airplane","span":1},{"key":"bluetooth","span":2},{"key":"dark","span":1},{"key":"dnd","span":1},{"key":"power-mode","span":2},{"key":"caffeine","span":2},{"key":"volume","span":4},{"key":"ext:microphone-sensitivity-high-symbolic","span":4},{"key":"brightness","span":4},{"key":"screenshot","span":1},{"key":"settings","span":1},{"key":"lock","span":1},{"key":"power","span":1}],"hidden":["battery","ext:keyboard-display-brightness-symbolic","ext:auto-rotate-rotation-allowed-symbolic","ext:no-background-apps"]}'</default>
+      <summary>Custom quick settings layout</summary>
+      <description>JSON layout of the custom grid: items with key/span, plus hidden keys. Only used when quick-settings-panel is macos.</description>
     </key>
 
     <key name="enable-osd-glass" type="b">

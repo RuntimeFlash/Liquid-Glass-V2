@@ -8,6 +8,7 @@ import {BlurMyShellWatch} from './dist/blurMyShell.js';
 import {DockWatcher} from './dist/dockManager.js';
 import {NotificationManager} from './dist/notificationManager.js';
 import {QuickSettingsManager} from './dist/quickSettingsManager.js';
+import {QuickSettingsManager as MacQuickSettingsManager} from './dist/quickSettings/manager.js';
 import {OsdManager} from './dist/osdManager.js';
 import {ApplicationManager} from './dist/applicationManager.js';
 import {WindowListService} from './dist/windowListService.js';
@@ -80,7 +81,14 @@ export default class LiquidGlassExtension extends Extension {
     // the menu is styled once they are in place.
     this._quickSettingsTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, QUICK_SETTINGS_DELAY_MS, () => {
       this._quickSettingsTimeoutId = 0;
-      this._quickSettingsManager = new QuickSettingsManager(path, this._settings, this._logger);
+      // "macos" is the fork's grid of glass cards with floating submenus and
+      // the layout editor; "native" is upstream's whole-menu or per-button
+      // glass on GNOME's own Quick Settings. The two cannot run together
+      // because both take over the panel, so the choice is read here at
+      // startup (changing it applies on the next extension reload).
+      const panel = this._settings.get_string('quick-settings-panel');
+      const Manager = panel === 'macos' ? MacQuickSettingsManager : QuickSettingsManager;
+      this._quickSettingsManager = new Manager(path, this._settings, this._logger);
       this._quickSettingsManager.setup();
       return GLib.SOURCE_REMOVE;
     });

@@ -380,6 +380,19 @@ export function normalizeAnimationIntervalMs(v: number): number {
   return Math.min(Math.round(v), MAX_INTERVAL_MS);
 }
 
+/**
+ * The fixed-step budget a frame needs to integrate the time it was allowed to
+ * skip: without it, an animation capped to 30fps would integrate only the 25ms
+ * its usual three steps cover and take longer in wall-clock time instead of
+ * running at the rate it was asked for. A stalled frame is still bounded by
+ * `maxFrameMs`.
+ */
+export function frameStepBudget(intervalMs: number, stepMs: number, maxFrameMs: number,
+                                floor: number, frameMs: number = 1000 / 60): number {
+  const span = Math.min(Math.max(0, intervalMs || 0) + frameMs, maxFrameMs);
+  return Math.max(floor, Math.ceil(span / stepMs) + 1);
+}
+
 // The longest frame the physics follows in full. It covers the 20fps cap the
 // preferences offer, so a capped animation keeps its speed; longer gaps (a
 // stall) are clamped instead of jumped over.

@@ -424,8 +424,26 @@ test('quick settings glass is chosen with the quick settings surface, and under 
   group.children.find(row => row.title === 'Apply glass to').selected = 1;
   assert.deepEqual(advanced.writes.at(-1), {'quick-settings-apply-to': 1});
   const simple = fixture();
-  simple.row('Apply quick settings glass to').selected = 1;
-  assert.deepEqual(simple.writes.at(-1), {'quick-settings-apply-to': 1});
+  simple.row('Quick Settings panel').selected = 2;
+  assert.deepEqual(simple.writes.at(-1), {'quick-settings-panel': 'native', 'quick-settings-apply-to': 1});
+});
+
+test('the quick settings panel choice picks the macOS grid or GNOME\'s own panel', () => {
+  const f = fixture({'preferences-advanced': true});
+  f.row('Surface').selected = 4;
+  const group = f.window.children[0].children.find(group => group.title === 'Quick settings');
+  const row = title => group.children.find(row => row.title === title);
+  const panel = row('Panel');
+  assert.equal(panel.selected, 0, 'macOS panel is the default');
+  assert.equal(row('Open scale').visible, true);
+  assert.equal(row('Button base color').visible, false);
+  assert.equal(row('Apply glass to').visible, false);
+
+  panel.selected = 2;
+  assert.deepEqual(f.writes.at(-1), {'quick-settings-panel': 'native', 'quick-settings-apply-to': 1});
+  assert.equal(row('Open scale').visible, false);
+  assert.equal(row('Button base color').visible, true);
+  assert.equal(row('Apply glass to').visible, true);
 });
 
 test('advanced animation intervals stay within their schema ranges on every animated surface', () => {
@@ -559,7 +577,7 @@ test('Individual buttons mode has its own animation switch in the quick settings
   assert.equal(switches().length, 2);
   assert.equal(shown().length, 1);
   assert.equal(shown()[0].subtitle, '', 'the whole menu has the spring and morph switch');
-  f.controls.write({'quick-settings-apply-to': 1});
+  f.controls.write({'quick-settings-panel': 'native', 'quick-settings-apply-to': 1});
   assert.equal(shown().length, 1);
   assert.match(shown()[0].subtitle, /spring out/);
   assert.equal(group.children.find(row => row.title === 'Grow from the button').visible, false);

@@ -15,6 +15,9 @@ export interface GlassRegion {
   x: number; y: number; w: number; h: number;
   tintR: number; tintG: number; tintB: number;
   baseStrength?: number;
+  // Corner radius for this region; 0 (the default) uses the glass's own
+  // corner_radius. Lets one glass mix circles, pills and rounded rectangles.
+  radius?: number;
 }
 
 /**
@@ -276,6 +279,7 @@ export class GlassRenderer {
     const rTintG = new Array(MAX_GLASS_REGIONS).fill(1.0);
     const rTintB = new Array(MAX_GLASS_REGIONS).fill(1.0);
     const rBaseStrength = new Array(MAX_GLASS_REGIONS).fill(0.0);
+    const rRadius = new Array(MAX_GLASS_REGIONS).fill(0.0);
 
     clamped.forEach((region, i) => {
       rx[i] = region.x;
@@ -286,6 +290,7 @@ export class GlassRenderer {
       rTintG[i] = region.tintG;
       rTintB[i] = region.tintB;
       rBaseStrength[i] = Math.max(0.0, Math.min(1.0, region.baseStrength ?? 0.0));
+      rRadius[i] = Math.max(0.0, region.radius ?? 0.0);
     });
 
     this.geometry.regions = clamped.map(r => [r.x, r.y, r.w, r.h]);
@@ -299,6 +304,7 @@ export class GlassRenderer {
     this.uniforms.setArray('region_tint_g', rTintG);
     this.uniforms.setArray('region_tint_b', rTintB);
     this.uniforms.setArray('region_base_strength', rBaseStrength);
+    this.uniforms.setArray('region_radius', rRadius);
     this._repaintIfDirty();
   }
 
@@ -623,6 +629,21 @@ export class MaterialSettings {
     private _repaintIfDirty: () => void,
   ) {}
 
+  // The shader takes the light's angle as its cosine and sine, so it does not
+  // evaluate trigonometry for every pixel. light_angle_deg stays set for
+  // anything that reads it back.
+  private _setLightAngle(degrees: number): void {
+    const radians = degrees * Math.PI / 180;
+    this._uniforms.set('light_angle_deg', degrees);
+    this._uniforms.set('light_cos', Math.cos(radians));
+    this._uniforms.set('light_sin', Math.sin(radians));
+  }
+
+  private _setMapped(uniform: string, value: number): void {
+    if (uniform === 'light_angle_deg') this._setLightAngle(value);
+    else this._uniforms.set(uniform, value);
+  }
+
   initialize(): void {
     // Buffered until the pipeline exists.
     this._uniforms.set('resolution_x', 0.0);
@@ -693,7 +714,7 @@ export class MaterialSettings {
       this._uniforms.set('rim_power', 3.0);
       this._uniforms.set('rim_light_color_intensity', 1.0);
       this._uniforms.set('sheen_intensity', 0.0);
-      this._uniforms.set('light_angle_deg', 90.0);
+      this._setLightAngle(90.0);
       this._uniforms.set('shadow_radius', 50.0);
       this._uniforms.set('shadow_intensity', 0.22);
       this._uniforms.set('ao_intensity', 0.65);
@@ -738,11 +759,11 @@ export class MaterialSettings {
     if (!settings) return;
 
     mappings.forEach(map => {
-      this._uniforms.set(map.uniform, settings.get_double(map.key));
+      this._setMapped(map.uniform, settings.get_double(map.key));
       // Without a repaint only the parts of the glass that something else
       // damaged would pick up the new value.
       const id = settings.connect(`changed::${map.key}`, () => {
-        this._uniforms.set(map.uniform, settings.get_double(map.key));
+        this._setMapped(map.uniform, settings.get_double(map.key));
         this._repaintIfDirty();
       });
       this._settingsIds.push(id);

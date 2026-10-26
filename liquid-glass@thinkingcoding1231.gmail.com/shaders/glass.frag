@@ -42,6 +42,14 @@ uniform float corner_smoothing_enabled;
 uniform float ao_intensity; // 0 = none, 1 = fully black at the edge
 uniform float ao_radius;    // px inward over which the band fades out
 uniform float light_angle_deg;
+// cos and sin of light_angle_deg, set together with it by MaterialSettings so
+// the shader does not evaluate trigonometry for every pixel.
+uniform float light_cos;
+uniform float light_sin;
+// The light's direction is normalize(vec3(cos, sin, LIGHT_Z)). cos^2 + sin^2
+// is 1, so its length is a constant and no normalize() is needed.
+#define LIGHT_Z 0.38
+#define LIGHT_INV_LEN 0.9347835805883489
 uniform float shadow_radius;
 uniform float shadow_intensity;
 // Room (px) the drop shadow has outside the glass before the actor clips it.
@@ -102,9 +110,10 @@ uniform float dock_y;
 uniform float dock_w;
 uniform float dock_h;
 
-// Multi-region mode, for Quick Settings' toggle-button glass: up to
+// Multi-region mode, for Quick Settings' grid and toggle-button glass: up to
 // MAX_GLASS_REGIONS separate rounded rects drawn from the same blurred
-// texture. The regions must not overlap, and they get no drop shadow.
+// texture. The regions must not overlap, and each one gets its own drop
+// shadow, so a grid of cards reads at the same depth as a single sheet.
 #define MAX_GLASS_REGIONS 16
 uniform float multi_region_mode; // 0 = the single dock_* rect, 1 = regions
 uniform float region_count;
@@ -118,6 +127,9 @@ uniform float region_tint_b[MAX_GLASS_REGIONS];
 // Strength of each region's own colour, separate from tint_strength so the
 // two tints stay independent. 0 when the colour could not be resolved.
 uniform float region_base_strength[MAX_GLASS_REGIONS];
+// Corner radius per region, so a grid can mix circles, pills and rectangles.
+// 0 means "use the global corner_radius".
+uniform float region_radius[MAX_GLASS_REGIONS];
 
 #ifdef LG_SHAPE_TEXTURE
 // The outline as distance fields over the dock_* rect, for glass text: the
@@ -182,12 +194,13 @@ float sdRoundRect(vec2 p, vec2 b, vec2 corner) {
 // The region this pixel is most inside of, with its local frame and colours.
 // Far outside every region the local position stays large, which main()
 // already treats as transparent.
-void findActiveRegion(vec2 pixel_coord, float pad, out vec2 outLocalPos, out vec2 outBoxSize, out vec3 outTint, out float outBaseStrength) {
+void findActiveRegion(vec2 pixel_coord, float pad, out vec2 outLocalPos, out vec2 outBoxSize, out vec3 outTint, out float outBaseStrength, out float outRadius) {
     float bestD = 1.0e6;
     outLocalPos = vec2(1.0e6);
     outBoxSize = vec2(1.0);
     outTint = vec3(1.0);
     outBaseStrength = 0.0;
+    outRadius = corner_radius;
 
     int count = int(min(region_count, float(MAX_GLASS_REGIONS)));
 
@@ -202,15 +215,19 @@ void findActiveRegion(vec2 pixel_coord, float pad, out vec2 outLocalPos, out vec
         vec2 actual_size = rSize - vec2(pad * 2.0);
         vec2 rBox = max(actual_size * 0.5, vec2(1.0));
 
+        // A region with no radius of its own (0) keeps the global one.
+        float rRadius = region_radius[i] > 0.0 ? region_radius[i] : corner_radius;
+
         // Picking the region needs no continuous corners; main() measures the
         // chosen one with them.
-        float d = sdCircleRoundRect(rLocal, rBox, corner_radius);
+        float d = sdCircleRoundRect(rLocal, rBox, rRadius);
         if (d < bestD) {
             bestD = d;
             outLocalPos = rLocal;
             outBoxSize = rBox;
             outTint = vec3(region_tint_r[i], region_tint_g[i], region_tint_b[i]);
             outBaseStrength = region_base_strength[i];
+            outRadius = rRadius;
         }
     }
 }
@@ -433,31 +450,47 @@ vec2 stabilizedUV(vec2 candidate, vec2 fallback) {
 
 // Maps a full-actor UV into the blurred sub-rect's UV, clamped 1.2 texels
 // inside it.
+// What blurUV() needs that depends only on uniforms. A pixel can take up to 30
+// backdrop taps, so initBlurUV() derives this once per pixel instead of every
+// tap re-deriving it. Call it before the first blurUV().
+bool g_blurRect;      // blur_rect_* is set; otherwise layer 1 spans the actor
+vec2 g_blurSize;      // size of the area layer 1 covers, px
+vec2 g_blurOrigin;    // its origin in actor-local px
+vec2 g_blurMargin;    // 1.2 texels in, as a fraction of that area
+vec2 g_blurTexSize;   // layer 1's size in texels
+bool g_blurMagnify;   // layer 1 is magnified, so the smooth warp applies
+
+void initBlurUV(vec2 resolution) {
+    g_blurRect = !(blur_rect_w < 1.0 || blur_rect_h < 1.0);
+    if (g_blurRect)
+        g_blurSize = vec2(blur_rect_w, blur_rect_h);
+    else
+        g_blurSize = max(resolution, vec2(1.0));
+    g_blurOrigin = vec2(blur_rect_x, blur_rect_y);
+    g_blurMargin = vec2(1.2) / g_blurSize;
+    g_blurTexSize = vec2(blur_tex_w, blur_tex_h);
+    g_blurMagnify = g_blurTexSize.x >= 2.0 && g_blurTexSize.y >= 2.0 &&
+        min(g_blurSize.x / g_blurTexSize.x, g_blurSize.y / g_blurTexSize.y) > 1.05;
+}
+
 vec2 blurUV(vec2 fullUV, vec2 resolution) {
     vec2 uv;
-    vec2 size;
-    if (blur_rect_w < 1.0 || blur_rect_h < 1.0) {
-        vec2 mFull = vec2(1.2) / max(resolution, vec2(1.0));
-        uv = clamp(fullUV, mFull, vec2(1.0) - mFull);
-        size = max(resolution, vec2(1.0));
+    if (g_blurRect) {
+        uv = clamp((fullUV * resolution - g_blurOrigin) / g_blurSize,
+                   g_blurMargin, vec2(1.0) - g_blurMargin);
     } else {
-        size = vec2(blur_rect_w, blur_rect_h);
-        vec2 m = vec2(1.2) / size;
-        uv = clamp((fullUV * resolution - vec2(blur_rect_x, blur_rect_y)) / size,
-                   m, vec2(1.0) - m);
+        uv = clamp(fullUV, g_blurMargin, vec2(1.0) - g_blurMargin);
     }
 
     // Smooth bilinear magnification: warping the coordinate inside its texel
     // with a smoothstep makes the reconstruction's slope continuous, which
     // removes the staircase plain bilinear leaves on diagonal edges. Skipped
     // at 1:1, where it would only move samples off their texel centres.
-    vec2 texSize = vec2(blur_tex_w, blur_tex_h);
-    if (texSize.x >= 2.0 && texSize.y >= 2.0 &&
-        min(size.x / texSize.x, size.y / texSize.y) > 1.05) {
-        vec2 t = uv * texSize - 0.5;
+    if (g_blurMagnify) {
+        vec2 t = uv * g_blurTexSize - 0.5;
         vec2 f = fract(t);
         f = f * f * (3.0 - 2.0 * f);
-        uv = (floor(t) + 0.5 + f) / texSize;
+        uv = (floor(t) + 0.5 + f) / g_blurTexSize;
     }
     return uv;
 }
@@ -593,11 +626,13 @@ void main() {
     vec2 local_pos;
     vec2 box_size;
     vec3 activeTint;
+    // The chosen region's corner radius (multi-region) or the global one.
+    float activeRadius = corner_radius;
     // The element's own colour strength; 0 outside multi-region mode.
     float activeBaseStrength = 0.0;
 
     if (multi_region_mode > 0.5) {
-        findActiveRegion(pixel_coord, padding, local_pos, box_size, activeTint, activeBaseStrength);
+        findActiveRegion(pixel_coord, padding, local_pos, box_size, activeTint, activeBaseStrength, activeRadius);
     } else {
         // The actor can be much larger than the glass (a monitor-sized
         // capture), so the shape comes from dock_*, not from the resolution.
@@ -616,7 +651,7 @@ void main() {
         activeTint = vec3(tint_r, tint_g, tint_b);
     }
 
-    vec2 corner = cornerShape(box_size, corner_radius);
+    vec2 corner = cornerShape(box_size, activeRadius);
     float d = sdRoundRect(local_pos, box_size, corner);
 
     float lensBand = lensBandFor(min(box_size.x, box_size.y));
@@ -636,13 +671,18 @@ void main() {
     // Two early exits for the regions where everything below collapses to a
     // constant. Together they cover most of every surface.
 
-    // Beyond the shadow's reach nothing is drawn. Multi-region mode has no
-    // shadow, so there it starts right at the edge.
-    float shadowReach = (multi_region_mode > 0.5) ? 0.0 : max(shadow_max_radius, 5.0);
+    // Beyond the shadow's reach nothing is drawn. With the shadow off (radius
+    // 0 or intensity 0) only the feather matters, so the band stays a couple
+    // of pixels wide.
+    float shadowEnabled = shadow_intensity * smoothstep(0.0, 0.75, shadow_radius);
+    float shadowReach = (shadowEnabled > 0.0) ? max(shadow_max_radius, 5.0) : 0.0;
     if (early_exit_enabled > 0.5 && debug_view < 0.5 && d >= max(shadowReach, edgeFeather)) {
         cogl_color_out = vec4(0.0);
         return;
     }
+
+    // Past the first exit, so the pixels that draw nothing skip this.
+    initBlurUV(resolution);
 
     // Deep inside, the dome is flat: no displacement, and with a flat normal
     // the rim, the AO band and the shadow all vanish. What is left is the
@@ -671,8 +711,7 @@ void main() {
 
         // Specular and sheen at N = (0, 0, 1): both reduce to the light's z,
         // and specMask to 0.65.
-        vec3 lightDirFlat = normalize(vec3(cos(radians(light_angle_deg)),
-                                           sin(radians(light_angle_deg)), 0.38));
+        vec3 lightDirFlat = vec3(light_cos, light_sin, LIGHT_Z) * LIGHT_INV_LEN;
         float facing = max(lightDirFlat.z, 0.0);
         float specFlat = pow(facing, max(shininess, 1.0)) * specular_intensity * 0.65;
         float sheenFlat = pow(facing, 1.65) * sheen_intensity;
@@ -697,8 +736,7 @@ void main() {
     // longer away from the light, and a cool tint instead of pure black.
 
     // Screen-space direction the shadow falls in (y points down).
-    float lightAngleRad = radians(light_angle_deg);
-    vec2 lightDir2D = vec2(cos(lightAngleRad), -sin(lightAngleRad));
+    vec2 lightDir2D = vec2(light_cos, -light_sin);
     vec2 shadowDir   = -lightDir2D;
 
     // 0 on the lit side, 1 opposite the light. The epsilon avoids NaN at the
@@ -852,7 +890,7 @@ void main() {
     // applied below, once the rim light is known.
     float aoMask = 1.0 - smoothstep(0.0, max(ao_radius, 0.001), -d);
 
-    vec3 lightDir = normalize(vec3(cos(lightAngleRad), sin(lightAngleRad), 0.38));
+    vec3 lightDir = vec3(light_cos, light_sin, LIGHT_Z) * LIGHT_INV_LEN;
     vec3 viewDir = vec3(0.0, 0.0, 1.0);
     vec3 reflectDir = reflect(-lightDir, normal);
     float response = 1.0;

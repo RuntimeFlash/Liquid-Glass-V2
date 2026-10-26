@@ -55,6 +55,16 @@ const TOP_BAR = [
   { title: 'Centered pill', patch: { 'top-bar-style': 'center' } },
 ];
 
+const QUICK_SETTINGS_PANEL = [
+  { title: 'macOS panel', patch: { 'quick-settings-panel': 'macos' } },
+  { title: 'Whole menu', patch: { 'quick-settings-panel': 'native', 'quick-settings-apply-to': 0 } },
+  { title: 'Individual buttons', patch: { 'quick-settings-panel': 'native', 'quick-settings-apply-to': 1 } },
+];
+
+const QUICK_SETTINGS_PANEL_HINT = 'macOS panel: the fork\'s grid of glass cards, floating submenus and layout editor. ' +
+  'Whole menu / Individual buttons: GNOME\'s own panel with one sheet of glass or glass on every toggle. ' +
+  'Applies on the next extension reload';
+
 const QUICK_SETTINGS_GLASS = [
   { title: 'Whole menu', patch: { 'quick-settings-apply-to': 0 } },
   { title: 'Individual buttons', patch: { 'quick-settings-apply-to': 1 } },
@@ -102,7 +112,8 @@ const LAYOUT = {
   ['y-offset', 'Vertical offset', -50, 100, 1], ['scale', 'Menu scale', 0.5, 1, 0.01]],
   notification: [['glass-expand', 'Glass expansion', 0, 50, 1], ['y-offset', 'Vertical offset', 0, 100, 1]],
   'quick-settings': [['glass-expand', 'Glass expansion', 0, 50, 1], ['x-offset', 'Horizontal offset', -100, 100, 1],
-  ['y-offset', 'Vertical offset', -100, 100, 1], ['toggle-tint-strength', 'Button base color', 0, 1, 0.01],
+  ['y-offset', 'Vertical offset', -100, 100, 1], ['open-scale', 'Open scale', 0.5, 2, 0.01],
+  ['toggle-tint-strength', 'Button base color', 0, 1, 0.01],
   ['toggle-corner-radius', 'Button corners', 0, 60, 1]],
   osd: [['glass-expand', 'Glass expansion', 0, 50, 1], ['y-offset', 'Vertical offset', -100, 100, 1]],
   application: [],
@@ -689,12 +700,16 @@ function addMotion(group, controls, surface) {
   const morphBranch = new ToggleBranch(morphToggle, 2);
   morphBranch.add(controls.number(group, 'Morph speed', [`${surface}-morph-speed`], 0.1, 3, 0.1), 0);
   for (const row of addNumbers(group, controls, SPRING, `${surface}-`, false).values()) morphBranch.add(row, 1);
-  const keys = surface === 'quick-settings' ? [key, 'quick-settings-apply-to'] : [key];
+  const keys = surface === 'quick-settings'
+    ? [key, 'quick-settings-apply-to', 'quick-settings-panel'] : [key];
   controls.watch(keys, () => {
-    const panel = surface !== 'quick-settings' || controls.settings.get_value('quick-settings-apply-to').deep_unpack() === 0;
-    toggle.visible = panel;
-    if (buttonsToggle) buttonsToggle.visible = !panel;
-    branch.enabled = panel && controls.settings.get_boolean(key);
+    const macos = surface === 'quick-settings' &&
+      controls.settings.get_string('quick-settings-panel') === 'macos';
+    const whole = surface !== 'quick-settings' || macos ||
+      controls.settings.get_value('quick-settings-apply-to').deep_unpack() === 0;
+    toggle.visible = whole;
+    if (buttonsToggle) buttonsToggle.visible = !whole;
+    branch.enabled = whole && controls.settings.get_boolean(key);
   });
   controls.watch([growKey], () => { morphBranch.switch = controls.settings.get_boolean(growKey) ? 0 : 1; });
 }
@@ -722,11 +737,14 @@ function addLayout(group, controls, surface, appearance) {
     });
   }
   if (surface === 'quick-settings') {
-    controls.watch(['quick-settings-apply-to'], () => {
-      const buttons = controls.settings.get_value('quick-settings-apply-to').deep_unpack() === 1;
+    controls.watch(['quick-settings-panel', 'quick-settings-apply-to'], () => {
+      const macos = controls.settings.get_string('quick-settings-panel') === 'macos';
+      const buttons = !macos &&
+        controls.settings.get_value('quick-settings-apply-to').deep_unpack() === 1;
       for (const key of ['toggle-tint-strength', 'toggle-corner-radius']) rows.get(key).visible = buttons;
-      for (const key of ['x-offset', 'y-offset']) rows.get(key).visible = !buttons;
-      appearance.get('corner-radius').visible = !buttons;
+      rows.get('open-scale').visible = macos;
+      for (const key of ['x-offset', 'y-offset']) rows.get(key).visible = macos || !buttons;
+      appearance.get('corner-radius').visible = macos || !buttons;
     });
   }
 }
@@ -779,7 +797,13 @@ function addAdaptiveColor(group, controls, surface) {
 function addSurface(page, controls, surface, title) {
   const group = controls.group(page, title);
   if (surface === 'top-bar') controls.choice(group, 'Style', TOP_BAR, 'The bar itself; menus have their own entries', false);
-  if (surface === 'quick-settings') controls.choice(group, 'Apply glass to', QUICK_SETTINGS_GLASS, QUICK_SETTINGS_GLASS_HINT, false);
+  if (surface === 'quick-settings') {
+    controls.choice(group, 'Panel', QUICK_SETTINGS_PANEL, QUICK_SETTINGS_PANEL_HINT, false);
+    const applyRow = controls.choice(group, 'Apply glass to', QUICK_SETTINGS_GLASS, QUICK_SETTINGS_GLASS_HINT, false);
+    controls.watch(['quick-settings-panel'], () => {
+      applyRow.visible = controls.settings.get_string('quick-settings-panel') !== 'macos';
+    });
+  }
 
   // The clock's digits are glass of their own shape, without corners or an outline.
   const clock = surface === 'glass-clock';
@@ -921,7 +945,7 @@ export function buildPreferences(window, settings) {
   controls.choice(surfaces, 'Top bar', TOP_BAR, 'The bar itself; menus are below', false);
   controls.toggle(surfaces, 'Dock', 'enable-dock-glass');
   controls.choice(surfaces, 'Menus', booleanChoices(MENU_KEYS), 'Calendar, quick settings, other top bar menus and desktop');
-  controls.choice(surfaces, 'Apply quick settings glass to', QUICK_SETTINGS_GLASS, QUICK_SETTINGS_GLASS_HINT, false);
+  controls.choice(surfaces, 'Quick Settings panel', QUICK_SETTINGS_PANEL, QUICK_SETTINGS_PANEL_HINT, false);
   controls.choice(surfaces, 'Popups', booleanChoices(POPUP_KEYS), 'Notifications and volume / brightness indicators');
 
   const rendering = controls.group(advanced, 'Rendering');
