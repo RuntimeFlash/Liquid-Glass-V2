@@ -11,7 +11,7 @@ import { addBeforeRedraw, removeBeforeRedraw, startSyncLoop, stopStageLoop } fro
 import { MENU_ANIMATION, canCloneSource, resetHoverCursor, setHoverCursor } from '../shellVersion.js';
 import { UIManager } from '../uiManager.js';
 import { WeatherWidget, EventsWidget, MediaWidget } from './widgets.js';
-import { parseAnchors, parsePositions, placeAtFraction, fractionOf, sanitizeAnchor, stackAt, stackColumns, snapMove, placeBeside, resizeRect } from './placement.js';
+import { coversRect, parseAnchors, parsePositions, placeAtFraction, fractionOf, sanitizeAnchor, stackAt, stackColumns, snapMove, placeBeside, resizeRect } from './placement.js';
 import { GlassClock } from './clock.js';
 export const WIDGET_IDS = ['weather', 'events', 'media'];
 const ANCHOR_NAMES = [
@@ -34,6 +34,9 @@ export class DesktopLayer {
     _openPreferences;
     _container = null;
     _items = new Map();
+    // An actor can lose its allocation while hidden. Keep its last stage rect so
+    // a covered item stays hidden instead of flashing visible every other frame.
+    _itemRects = new Map();
     _settingsIds = [];
     _signals = [];
     _frameSyncId = 0;
@@ -95,6 +98,7 @@ export class DesktopLayer {
                 continue;
             if (this._edit?.item === item)
                 this._edit.end();
+            this._itemRects.delete(item);
             item.destroy();
             this._items.delete(id);
         }
@@ -262,8 +266,9 @@ export class DesktopLayer {
     }
 
     _step() {
+        const covers = this._opaqueWindowRects();
         for (const item of this._items.values()) {
-            if (item.sync())
+            if (item.sync(this._itemIsExposed(item, covers)))
                 this._needsLayout = true;
         }
         if (this._needsLayout) {
@@ -271,6 +276,61 @@ export class DesktopLayer {
             this._layout();
         }
         this._edit?.sync();
+    }
+
+    /**
+     * Rectangles that definitely hide a desktop item. The desktop layer is
+     * below the window group, so window ordering is irrelevant here: any opaque
+     * normal/dialog window that contains the entire item hides it. We do not
+     * cull translucent, minimized, or off-workspace windows, because the glass
+     * can still be seen through or around those.
+     */
+    _opaqueWindowRects() {
+        if (Main.overview.visible)
+            return [];
+        const activeWorkspace = global.workspace_manager.get_active_workspace();
+        const rects = [];
+        // Sibling walk instead of get_window_actors(), which builds a JS array on
+        // every stage frame.
+        for (let actor = global.window_group.get_first_child(); actor; actor = actor.get_next_sibling()) {
+            if (!(actor instanceof Meta.WindowActor))
+                continue;
+            const window = actor.get_meta_window();
+            if (!window || window.minimized || !actor.visible || actor.opacity < 255)
+                continue;
+            const type = window.get_window_type();
+            if (type !== Meta.WindowType.NORMAL && type !== Meta.WindowType.DIALOG &&
+                type !== Meta.WindowType.MODAL_DIALOG)
+                continue;
+            const workspace = window.get_workspace();
+            if (workspace && workspace !== activeWorkspace)
+                continue;
+            const r = window.get_buffer_rect();
+            if (r.width > 0 && r.height > 0)
+                rects.push({ x: r.x, y: r.y, width: r.width, height: r.height });
+        }
+        return rects;
+    }
+
+    _itemIsExposed(item, covers) {
+        // Do not hide an item before its first allocation, nor while it is being
+        // edited: either case needs it painted so that its geometry is established
+        // and its interaction remains visible.
+        if (!item.shown || this._edit?.item === item)
+            return true;
+        if (item.actor.has_allocation()) {
+            const [x, y] = item.actor.get_transformed_position();
+            const [width, height] = item.actor.get_transformed_size();
+            const next = { x, y, width, height };
+            if ([x, y, width, height].every(Number.isFinite) && width > 0 && height > 0)
+                this._itemRects.set(item, next);
+        }
+        const itemRect = this._itemRects.get(item);
+        // Its first allocation has not happened yet; leave it visible so that
+        // Clutter can establish the rect on the next frame.
+        if (!itemRect)
+            return true;
+        return !covers.some(cover => coversRect(cover, itemRect));
     }
 
     _workArea() {
@@ -407,6 +467,7 @@ export class DesktopLayer {
         for (const item of this._items.values())
             item.destroy();
         this._items.clear();
+        this._itemRects.clear();
         this._removeContainer();
     }
 

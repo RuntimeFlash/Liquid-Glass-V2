@@ -8,6 +8,18 @@ export const ANCHORS: readonly Anchor[] = ['top-left', 'top-right', 'bottom-left
 
 export interface Rect { x: number; y: number; width: number; height: number; }
 
+/** Whether `cover` contains every visible pixel of `target`. */
+export function coversRect(cover: Rect, target: Rect): boolean {
+  const values = [cover.x, cover.y, cover.width, cover.height,
+    target.x, target.y, target.width, target.height];
+  if (!values.every(Number.isFinite) || cover.width <= 0 || cover.height <= 0 ||
+    target.width <= 0 || target.height <= 0)
+    return false;
+  return cover.x <= target.x && cover.y <= target.y &&
+    cover.x + cover.width >= target.x + target.width &&
+    cover.y + cover.height >= target.y + target.height;
+}
+
 // Room between an item and the edge of the work area, and between items.
 export const EDGE_MARGIN = 32;
 export const ITEM_GAP = 16;

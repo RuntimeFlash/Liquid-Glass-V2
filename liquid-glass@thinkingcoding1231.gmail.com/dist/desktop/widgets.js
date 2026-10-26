@@ -72,6 +72,7 @@ export class GlassCard {
     _settingsIds = [];
     _lastSize = '';
     _lastShown = false;
+    _needsMeasure = true;
     _text;
     _shown = true;
 
@@ -91,6 +92,7 @@ export class GlassCard {
         this.actor.add_child(this.box);
         connectClicks(this.actor, () => this.activate(), (x, y) => env.menu(this, x, y));
         this._text = new AdaptiveTextColor(() => [this.box], () => [this.glass], env.logger, `desktop ${id}`);
+        this.box.connect('style-changed', () => { this._needsMeasure = true; });
         const watch = (key, fn) => this._settingsIds.push(env.settings.connect(`changed::${key}`, fn));
         for (const key of ['tint-color', 'tint-strength', 'blur-radius', 'corner-radius', 'brightness', 'contrast', 'saturation'])
             watch(`desktop-widget-${key}`, () => this._applyMaterial());
@@ -111,6 +113,7 @@ export class GlassCard {
         if (shown === this._shown)
             return;
         this._shown = shown;
+        this._needsMeasure = true;
         this.env.relayout(); // defined in desktopLayer.ts (connects to the _queueLayout() in the DesktopLayer)
     }
 
@@ -138,6 +141,7 @@ export class GlassCard {
 
     // The content changed; measure the text color again.
     contentChanged() {
+        this._needsMeasure = true;
         this._text.invalidate();
         this.env.relayout();
     }
@@ -152,25 +156,37 @@ export class GlassCard {
         return [0, 0, ...this.size()];
     }
 
-    sync() {
+    sync(exposed = true) {
         const shown = this.shown;
-        this.actor.visible = shown;
-        const [w, h] = this.size();
-        const key = `${w}x${h}`;
-        const changed = key !== this._lastSize || shown !== this._lastShown;
+        // A desktop card remains part of the layout while it is covered, but
+        // unmapping it is essential: a cached wallpaper blur still has to run its
+        // composite shader whenever the stage underneath a window is repainted.
+        const visible = shown && exposed;
+        if (this.actor.visible !== visible)
+            this.actor.visible = visible;
+        let changed = shown !== this._lastShown;
         this._lastShown = shown;
-        if (key !== this._lastSize) {
-            this._lastSize = key;
-            const m = SHADOW_MARGIN;
-            const p = SHADER_PADDING;
-            this.glass.set_position(-m, -m);
-            this.glass.set_size(w + m * 2, h + m * 2);
-            this.glass.setResolution(w + m * 2, h + m * 2);
-            this.glass.setGlassGeometry(m - p, m - p, w + p * 2, h + p * 2);
-            this.actor.set_size(w, h);
-            this._text.invalidate();
+        // The content can change size without a signal, so it is measured again
+        // only when contentChanged() or a style change says it may have; measuring
+        // the preferred size every frame was pure polling.
+        if (this._needsMeasure) {
+            this._needsMeasure = false;
+            const [w, h] = this.size();
+            const key = `${w}x${h}`;
+            if (key !== this._lastSize) {
+                this._lastSize = key;
+                const m = SHADOW_MARGIN;
+                const p = SHADER_PADDING;
+                this.glass.set_position(-m, -m);
+                this.glass.set_size(w + m * 2, h + m * 2);
+                this.glass.setResolution(w + m * 2, h + m * 2);
+                this.glass.setGlassGeometry(m - p, m - p, w + p * 2, h + p * 2);
+                this.actor.set_size(w, h);
+                this._text.invalidate();
+                changed = true;
+            }
         }
-        if (shown && this.actor.mapped) {
+        if (visible && this.actor.mapped) {
             ensureGlassAllocated(this.glass);
             this.glass.syncSources();
         }

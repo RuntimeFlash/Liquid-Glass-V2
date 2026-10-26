@@ -21,6 +21,12 @@ class Widget extends Signals {
   add_child(a) { this.children.push(a); a.parent = this; this.emit('child-added', a); }
   remove_child(a) { this.children.splice(this.children.indexOf(a), 1); a.parent = null; this.emit('child-removed', a); }
   get_children() { return [...this.children]; }
+  get_first_child() { return this.children[0] ?? null; }
+  get_next_sibling() {
+    if (!this.parent) return null;
+    const i = this.parent.children.indexOf(this);
+    return i < 0 ? null : this.parent.children[i + 1] ?? null;
+  }
   get_parent() { return this.parent; }
   get_position() { return [this.x, 0]; }
   has_style_class_name(name) { return this.styleClasses.has(name); }

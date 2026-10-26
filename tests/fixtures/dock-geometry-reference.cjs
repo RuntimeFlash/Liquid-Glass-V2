@@ -192,10 +192,6 @@ module.exports = ({ Main, setClipIfChanged }) => {
             this._lastBgY = undefined;
             return;
         }
-        else {
-            this.glass.show();
-        }
-        this.glass.opacity = this.targetActor.opacity;
         let visibleW = baseW;
         let visibleH = baseH;
         if (monitor) {
@@ -216,13 +212,19 @@ module.exports = ({ Main, setClipIfChanged }) => {
                     `monitor=(${monitor?.x},${monitor?.y},${monitor?.width}x${monitor?.height}) ` +
                     `margin=${this._marginValue}`);
             }
-            this.glass.opacity = 0;
+            this.glass.hide();
+            this._lastBgW = undefined;
+            this._lastBgH = undefined;
+            this._lastBgX = undefined;
+            this._lastBgY = undefined;
+            return;
         }
         else {
             if (this._lastHidden === true) {
                 this._lastHidden = false;
                 this._logger.log('[Liquid Glass][dock] glass visible again');
             }
+            this.glass.show();
             this.glass.opacity = this.targetActor.opacity;
         }
         let bgW = Math.max(1.0, w + (SHADER_PADDING * 2) + (this._glassExpand * 2));

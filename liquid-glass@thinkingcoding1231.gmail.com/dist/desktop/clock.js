@@ -329,13 +329,18 @@ export class GlassClock {
         return this._bounds;
     }
 
-    sync() {
+    sync(exposed = true) {
+        // Keep the clock's geometry current while covered, but do not let its
+        // cached wallpaper texture and glass composite be painted behind an
+        // opaque window.
+        if (this.actor.visible !== exposed)
+            this.actor.visible = exposed;
         const changed = this._sizeChanged;
         if (changed) {
             this._sizeChanged = false;
             this._layout();
         }
-        if (this.actor.mapped) {
+        if (exposed && this.actor.mapped) {
             ensureGlassAllocated(this._glass);
             this._glass.syncSources();
         }

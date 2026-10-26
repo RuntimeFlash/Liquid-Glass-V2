@@ -474,7 +474,8 @@ export class TopBarManager {
         let bx = 0;
         for (let actor = box; actor && actor !== this._panel; actor = actor.get_parent())
             bx += actor.get_position()[0];
-        for (const child of box.get_children()) {
+        // Sibling walk: this runs for every box on every stage frame.
+        for (let child = box.get_first_child(); child; child = child.get_next_sibling()) {
             if (!child.visible || child.width < 1)
                 continue;
             const alloc = child.get_allocation_box();
