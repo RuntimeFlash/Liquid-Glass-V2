@@ -724,11 +724,16 @@ export default class LgDriver extends Extension {
     await sleep(2000);
     const panel = qsm._submenuRenderer?._floatingWindow;
     const rows = panel?.content?.get_n_children?.() ?? -1;
+    const glass = panel?._glass;
+    const glassOk = glass?.constructor?.name === 'BackdropGlass' &&
+      glass?._owner === 'quick-settings-submenu';
     log(`qsdrill: swayEvent=${hit ?? 'none'} floatingWindow=${!!panel} panelChildren=${rows} ` +
+      `glass=${glass?.constructor?.name ?? 'none'} owner=${glass?._owner ?? '-'} paints=${glass?.paintCount ?? 0} ` +
       `qsOpen=${qs.isOpen} nativeMenuOpen=${!!card.menu?.isOpen}`);
     // The regression this part exists for: the card's click reached the LG
     // renderer but the floating window never came up, so the click looked dead.
-    log(`qsdrill: ${hit === 'clicked' && panel ? 'RESULT ok' : 'RESULT FAILED'} — clicked=${hit ?? 'none'} submenu=${!!panel}`);
+    log(`qsdrill: ${hit === 'clicked' && panel && glassOk ? 'RESULT ok' : 'RESULT FAILED'} — ` +
+      `clicked=${hit ?? 'none'} submenu=${!!panel} glass=${!!glassOk}`);
     await shot('qs-drilldown', [m.x + m.width - 700, m.y, 700, 900]);
     try { panel?.close?.(true); } catch (e) {}
     await sleep(1500);

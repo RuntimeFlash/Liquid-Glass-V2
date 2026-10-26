@@ -1,59 +1,31 @@
 //
 // The floating submenu's panel: its glass, its geometry and its lifetime.
 //
-// Design (after the borrowed-backdrop experiment)
-// ----------------------------------------------
-// An earlier rewrite tried to reuse Quick Settings' frosted sheet as the
-// submenu backdrop. That failed two ways, both measured:
-//
-//   * The panel's LiquidEffect was applied to an *empty* actor, so the shader
-//     sampled transparent paint and the refraction/tint/rim optics rendered
-//     nothing at all.
-//   * The borrowed sheet was re-measured and re-sized on every animation frame,
-//     which reallocates the Shell.BlurEffect offscreen buffer per frame. The
-//     probe recorded 600-765ms single-frame stalls, and the open (nominally
-//     ~230ms) took ~900ms of wall clock.
-//
-// The panel now owns a complete glass stack again -- wallpaper clone, culled
-// window clones, a reduced-resolution ACTOR blur and a LiquidEffect -- exactly
-// like a Quick Settings card backing. The stack is built once and survives
-// across opens, and its geometry is resolved *once* before the transition
-// starts. During the animation only the panel's scale and the opacities move;
-// no offscreen buffer is ever reallocated mid-transition.
+// The glass is a BackdropGlass, the same stage-copy + Dual Kawase + glass.frag
+// pipeline the Quick Settings grid and the calendar menu use. It is separate
+// from the grid's glass because the submenu sits above Quick Settings during
+// the return crossfade; one shared glass would draw both surfaces in a single
+// pass and lose that stacking.
 import Clutter from 'gi://Clutter';
-import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import { LiquidEffect } from './liquidEffect.js';
-import { hexToColorArray } from '../animation/colors.js';
-import { UnpickableActor, UnpickableClone, createBackdropClone, syncBackdropClone } from './qsUtils.js';
+import { startSyncLoop, stopStageLoop } from '../animation/frameLoops.js';
+import { QS_DEFAULT_CORNER_RADIUS, QS_GLASS_PADDING, applyQuickSettingsGlassAppearance, createQuickSettingsGlass, quickSettingsCornerRadius, quickSettingsShadowRoom, } from './glassAppearance.js';
 import { SubmenuAnimation } from './submenuAnimation.js';
 import { markOpenTrigger } from '../diagnostics/openLag.js';
-/** Transparent padding outside the glass, so the shader is never clipped. */
-export const SHADER_PADDING = 20;
 const PANEL_WIDTH = 360;
 const MIN_PANEL_HEIGHT = 96;
-const CORNER_RADIUS = 28;
 /** Matches `.liquid-glass-floating-window-layout` padding in the stylesheet. */
 const LAYOUT_PAD_X = 10;
 const LAYOUT_PAD_Y = 8;
-/**
- * Linear downscale of the backdrop blur's offscreen buffer. ShellBlurEffect
- * allocates that buffer at the actor's allocation, so blurring into a smaller
- * container and scaling it back up is the only way to cheapen the pass. The
- * radius is divided by the same factor to keep the on-screen blur identical.
- */
-const BLUR_FBO_DIVISOR = 2;
-
-function rectsIntersect(a, b) {
-    return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-}
+const PALETTE_LIGHT = 'liquid-glass-control-palette-light';
+const PALETTE_DARK = 'liquid-glass-control-palette-dark';
 
 /**
  * One floating submenu panel. It is created once per renderer and reused: an
  * open is `present()`, a close is `close()`, and only `destroy()` (extension
- * teardown) actually tears the glass stack down. Every asynchronous
- * continuation checks `_destroyed`/`_generation` first.
+ * teardown) actually tears the glass down. Every asynchronous continuation
+ * checks `_destroyed`/`_generation` first.
  */
 export class SubmenuPanel {
     _manager;
@@ -67,15 +39,21 @@ export class SubmenuPanel {
     _panel;
     _layout;
     _content;
-    _effect;
-    _clipBox;
-    _fboContainer;
-    _halfBox;
-    _bgClone;
-    _windowClonesContainer;
-    _windowClones = new Map();
-    _blur;
-    _fboScale = 1;
+    _glassSyncId = 0;
+    _glassFirstId = 0;
+
+    get _glassSyncSlot() {
+        return { get: () => this._glassSyncId, set: (id) => { this._glassSyncId = id; } };
+    }
+
+    get _glassFirstSlot() {
+        return { get: () => this._glassFirstId, set: (id) => { this._glassFirstId = id; } };
+    }
+
+    _glassSettingsIds = [];
+    _paletteSignalId = 0;
+    _shadowRoom = 0;
+    _cornerRadius = QS_DEFAULT_CORNER_RADIUS;
     _anim;
     // Measures the real content height (the rows list), supplied by the renderer.
     // The panel cannot use its own content box for this: that box holds a
@@ -85,8 +63,8 @@ export class SubmenuPanel {
     _y = 0;
     _width = PANEL_WIDTH;
     _height = MIN_PANEL_HEIGHT;
-    _glassW = PANEL_WIDTH + SHADER_PADDING * 2;
-    _glassH = MIN_PANEL_HEIGHT + SHADER_PADDING * 2;
+    _glassW = PANEL_WIDTH + QS_GLASS_PADDING * 2;
+    _glassH = MIN_PANEL_HEIGHT + QS_GLASS_PADDING * 2;
     /** Called when the close transition has finished and the panel is hidden. */
     _onClosed = null;
     /**
@@ -149,7 +127,7 @@ export class SubmenuPanel {
         this._root.add_child(this._glass);
         // The panel body. Clipped, and the only place the rows live.
         const win = new St.Widget({
-            style_class: `liquid-glass-floating-window-container ${this._paletteClass()}`,
+            style_class: 'liquid-glass-floating-window-container',
             reactive: true,
             can_focus: true,
             x: 0,
@@ -180,6 +158,8 @@ export class SubmenuPanel {
         this._panel = win;
         this._layout = layout;
         this._content = content;
+        this._syncPaletteClass();
+        this._paletteSignalId = St.Settings.get().connect('notify::color-scheme', () => this._syncPaletteClass());
         this._anim = new SubmenuAnimation({
             getRoot: () => (this._destroyed ? null : this._root),
             getContent: () => (this._destroyed ? null : this._content),
@@ -188,7 +168,7 @@ export class SubmenuPanel {
             isAlive: () => !this._destroyed,
             onStart: () => markOpenTrigger('submenu-open'),
             onSettled: (opening) => this._onSettled(opening),
-            onFrame: () => { },
+            onFrame: () => this._syncGlass(),
         });
         this._scrim.connect('button-press-event', () => {
             this.close(true);
@@ -204,95 +184,64 @@ export class SubmenuPanel {
     }
 
     /**
-     * Builds the liquid glass stack: a wallpaper clone and culled window clones
-     * blurred by a reduced-resolution ACTOR blur, then refracted by a
-     * LiquidEffect. This mirrors the Quick Settings card backings pipeline so the
-     * submenu gets the same optics.
+     * The submenu uses the same glass surface as the Quick Settings grid, but is
+     * its own actor so it can sit above the grid during the return crossfade.
      */
     _buildGlass() {
-        const glassW = this._width + SHADER_PADDING * 2;
-        const glassH = this._height + SHADER_PADDING * 2;
-        this._glassW = glassW;
-        this._glassH = glassH;
-        this._glass = new St.Widget({
-            style_class: 'liquid-glass-floating-window-backing',
-            reactive: false,
-            clip_to_allocation: false,
-            x: -SHADER_PADDING,
-            y: -SHADER_PADDING,
-            width: glassW,
-            height: glassH,
+        const settings = this._manager._settings;
+        this._cornerRadius = quickSettingsCornerRadius(settings);
+        this._shadowRoom = quickSettingsShadowRoom(settings);
+        this._glass = createQuickSettingsGlass(this._manager, {
+            owner: 'quick-settings-submenu',
+            outline: 'quick-settings',
+            multiRegion: true,
+            cornerRadius: this._cornerRadius,
         });
-        this._clipBox = new St.Widget({ clip_to_allocation: true, reactive: false });
-        this._clipBox.set_size(glassW, glassH);
-        this._glass.add_child(this._clipBox);
-        this._fboContainer = new UnpickableActor();
-        this._fboContainer.set_pivot_point(0, 0);
-        this._fboContainer.set_size(glassW, glassH);
-        this._clipBox.add_child(this._fboContainer);
-        this._halfBox = new UnpickableActor();
-        this._halfBox.set_pivot_point(0, 0);
-        this._fboContainer.add_child(this._halfBox);
-        this._bgClone = createBackdropClone();
-        this._halfBox.add_child(this._bgClone);
-        this._windowClonesContainer = new UnpickableActor();
-        this._halfBox.add_child(this._windowClonesContainer);
-        try {
-            this._blur = new Shell.BlurEffect({
-                radius: this._manager._settings.get_int('quick-settings-blur-radius'),
-                mode: Shell.BlurMode.ACTOR,
-            });
-            this._fboContainer.add_effect(this._blur);
-        }
-        catch (e) { }
-        this._applyBlurRadius();
-        const effect = new LiquidEffect({
-            extensionPath: this._manager.extensionPath,
-            settings: this._manager._settings,
-        });
-        effect.setPadding(SHADER_PADDING);
-        effect.setCornerRadius(CORNER_RADIUS);
-        effect.setIsDock(false);
-        const tint = hexToColorArray(this._manager._settings.get_string('quick-settings-tint-color'));
-        effect.setTintColor(...tint);
-        effect.setTintStrength(this._manager._settings.get_double('quick-settings-tint-strength'));
-        this._glass.add_effect(effect);
-        this._effect = effect;
+        this._glassSettingsIds.push(settings.connect('changed::quick-settings-tint-color', () => this._applyGlassSettings()), settings.connect('changed::quick-settings-tint-strength', () => this._applyGlassSettings()), settings.connect('changed::quick-settings-blur-radius', () => this._applyGlassSettings()), settings.connect('changed::quick-settings-corner-radius', () => this._applyGlassSettings()), settings.connect('changed::shadow-radius', () => this._applyGlassSettings()), settings.connect('changed::shadow-intensity', () => this._applyGlassSettings()));
     }
 
-    /** Splits the requested blur radius into a reduced radius + counter-scale. */
-    _applyBlurRadius() {
-        try {
-            let base = Math.max(0, Math.round(this._manager._settings.get_int('quick-settings-blur-radius')));
-            let scale = 1;
-            let radius = base;
-            if (base > 1) {
-                radius = Math.max(1, Math.round(base / BLUR_FBO_DIVISOR));
-                scale = base / radius;
-            }
-            this._fboScale = scale > 0 ? scale : 1;
-            if (this._blur)
-                this._blur.radius = radius;
-            const inverse = 1 / this._fboScale;
-            this._halfBox.set_pivot_point(0, 0);
-            this._halfBox.set_scale(inverse, inverse);
-        }
-        catch (e) { }
+    _applyGlassSettings() {
+        const settings = this._manager._settings;
+        this._cornerRadius = quickSettingsCornerRadius(settings);
+        this._shadowRoom = applyQuickSettingsGlassAppearance(this._glass, settings, this._cornerRadius);
+        if (!this._panel)
+            return;
+        this._applyGeometry();
+        if (this._presented)
+            this._syncGlass();
     }
 
-    _paletteClass() {
-        return 'liquid-glass-control-palette-dark';
+    _syncPaletteClass() {
+        const light = St.Settings.get().color_scheme !== St.SystemColorScheme.PREFER_DARK;
+        this._panel.remove_style_class_name(light ? PALETTE_DARK : PALETTE_LIGHT);
+        this._panel.add_style_class_name(light ? PALETTE_LIGHT : PALETTE_DARK);
     }
 
     // ---- geometry ---------------------------------------------------------
     /**
-     * Lays the panel out offscreen and resolves its final size. Runs before the
-     * panel is shown and again after a settled row rebuild; never during the
-     * open/close transition.
+     * Resolves the panel's final rect. Runs on present and again after a settled
+     * row rebuild; never during the open/close transition.
      */
     measure() {
-        const monitor = this._manager._getMenuMonitorGeometry?.()
-            || Main.layoutManager.primaryMonitor || Main.layoutManager.monitors[0];
+        if (this._destroyed || !this._presented)
+            return;
+        let monitor = Main.layoutManager.primaryMonitor || Main.layoutManager.monitors[0];
+        let sourceRight = monitor.x + monitor.width - 24;
+        let sourceBottom = monitor.y + 36;
+        try {
+            const qs = Main.panel.statusArea?.quickSettings;
+            const sourceActor = qs?.container || qs;
+            if (sourceActor) {
+                const index = Main.layoutManager.findIndexForActor(sourceActor);
+                if (index >= 0)
+                    monitor = Main.layoutManager.monitors[index] || monitor;
+                const [sx, sy] = sourceActor.get_transformed_position();
+                const [sw, sh] = sourceActor.get_size();
+                sourceRight = sx + sw;
+                sourceBottom = sy + sh;
+            }
+        }
+        catch (e) { }
         const maxHeight = Math.max(MIN_PANEL_HEIGHT, monitor.height - 96);
         const innerWidth = PANEL_WIDTH - LAYOUT_PAD_X * 2;
         let natural = MIN_PANEL_HEIGHT;
@@ -312,19 +261,6 @@ export class SubmenuPanel {
         const height = Math.round(Math.min(maxHeight, Math.max(MIN_PANEL_HEIGHT, natural + LAYOUT_PAD_Y * 2)));
         // Anchor under the Quick Settings panel button, right-aligned to it, and
         // clamp into the monitor.
-        let sourceRight = monitor.x + monitor.width - 24;
-        let sourceBottom = monitor.y + 36;
-        try {
-            const qs = Main.panel.statusArea?.quickSettings;
-            const sourceActor = qs?.container || qs;
-            if (sourceActor) {
-                const [sx, sy] = sourceActor.get_transformed_position();
-                const [sw, sh] = sourceActor.get_size();
-                sourceRight = sx + sw;
-                sourceBottom = sy + sh;
-            }
-        }
-        catch (e) { }
         const x = Math.round(Math.min(Math.max(sourceRight - PANEL_WIDTH, monitor.x + 24), monitor.x + monitor.width - PANEL_WIDTH - 24));
         const y = Math.round(Math.min(Math.max(sourceBottom + 12, monitor.y + 24), monitor.y + monitor.height - height - 24));
         const changed = x !== this._x || y !== this._y || height !== this._height;
@@ -332,136 +268,65 @@ export class SubmenuPanel {
         this._y = y;
         this._width = PANEL_WIDTH;
         this._height = height;
-        if (changed || this._glassW !== this._width + SHADER_PADDING * 2) {
+        if (changed) {
             this._applyGeometry();
             if (this._presented)
-                this._syncBackdrop(false);
+                this._syncGlass();
         }
     }
 
-    /** Applies the resolved rect to every actor. Called once per open. */
+    /**
+     * Applies the resolved rect to every actor. The glass actor carries room for
+     * the padding and the drop shadow; its single region is the padded panel.
+     */
     _applyGeometry() {
-        this._glassW = this._width + SHADER_PADDING * 2;
-        this._glassH = this._height + SHADER_PADDING * 2;
+        const pad = QS_GLASS_PADDING;
+        const outer = Math.max(pad, this._shadowRoom);
+        this._glassW = this._width + outer * 2;
+        this._glassH = this._height + outer * 2;
         const innerW = this._width - LAYOUT_PAD_X * 2;
         const innerH = this._height - LAYOUT_PAD_Y * 2;
         this._root.set_position(this._x, this._y);
         this._root.set_size(this._width, this._height);
-        this._glass.set_position(-SHADER_PADDING, -SHADER_PADDING);
-        this._glass.set_size(this._glassW, this._glassH);
         this._panel.set_size(this._width, this._height);
         this._layout.set_size(this._width, this._height);
         this._content.set_size(innerW, innerH);
-        this._clipBox.set_size(this._glassW, this._glassH);
-        const fboW = Math.max(1, this._glassW / this._fboScale);
-        const fboH = Math.max(1, this._glassH / this._fboScale);
-        this._fboContainer.set_size(fboW, fboH);
-        this._fboContainer.set_position(0, 0);
-        // Counter-scale so the reduced-resolution blur buffer lands back on the
-        // glass rect (the half-box below is scaled by 1/k to fit the source into it).
-        this._fboContainer.set_pivot_point(0, 0);
-        this._fboContainer.set_scale(this._fboScale, this._fboScale);
-        this._effect.setResolution(this._glassW, this._glassH);
+        this._glass.set_position(-outer, -outer);
+        this._glass.set_size(this._glassW, this._glassH);
+        this._glass.setResolution(this._glassW, this._glassH);
+        this._glass.setGlassGeometry(0, 0, this._glassW, this._glassH);
+        const region = {
+            x: outer - pad,
+            y: outer - pad,
+            w: this._width + pad * 2,
+            h: this._height + pad * 2,
+            tintR: 1.0,
+            tintG: 1.0,
+            tintB: 1.0,
+            baseStrength: 0.0,
+            radius: this._cornerRadius,
+        };
+        this._glass.setGlassRegions([region]);
     }
 
-    // ---- backdrop ---------------------------------------------------------
-    /**
-     * Positions the wallpaper and window clones inside the glass, and (when
-     * `rebuild`) rebuilds the window clone set culled to the glass rect. Clones
-     * are captured in stage coordinates; the clone containers are offset by the
-     * glass's stage origin so the content lands under the panel. This runs once
-     * per open and once per settled remeasure -- never per animation frame.
-     */
-    _syncBackdrop(rebuild) {
+    _syncGlass() {
         if (this._destroyed)
             return;
-        try {
-            const glassX = this._x - SHADER_PADDING;
-            const glassY = this._y - SHADER_PADDING;
-            syncBackdropClone(this._bgClone);
-            this._bgClone.set_size(this._glassW, this._glassH);
-            this._bgClone.set_position(-glassX, -glassY);
-            if (!this._bgClone.visible)
-                this._bgClone.show();
-            const container = this._windowClonesContainer;
-            const state = this._cloneState || {};
-            if (state.x !== -glassX || state.y !== -glassY)
-                container.set_position(-glassX, -glassY);
-            state.x = -glassX;
-            state.y = -glassY;
-            this._cloneState = state;
-            if (!rebuild)
-                return;
-            const clipRect = { x: glassX, y: glassY, w: this._glassW, h: this._glassH };
-            const windowActors = global.get_window_actors();
-            const active = new Set();
-            let zOrderDirty = false;
-            for (const windowActor of windowActors) {
-                const metaWindow = windowActor.get_meta_window?.();
-                if (!metaWindow || metaWindow.minimized || !windowActor.visible)
-                    continue;
-                const windowRect = {
-                    x: windowActor.x + windowActor.translation_x,
-                    y: windowActor.y + windowActor.translation_y,
-                    w: windowActor.width * windowActor.scale_x,
-                    h: windowActor.height * windowActor.scale_y,
-                };
-                if (!rectsIntersect(windowRect, clipRect))
-                    continue;
-                active.add(windowActor);
-                let clone = this._windowClones.get(windowActor);
-                if (!clone) {
-                    clone = new UnpickableClone({ source: windowActor });
-                    container.add_child(clone);
-                    this._windowClones.set(windowActor, clone);
-                    zOrderDirty = true;
-                }
-                clone.set_position(windowActor.x, windowActor.y);
-                clone.set_size(windowActor.width, windowActor.height);
-                clone.set_scale(windowActor.scale_x, windowActor.scale_y);
-                clone.translation_x = windowActor.translation_x;
-                clone.translation_y = windowActor.translation_y;
-            }
-            for (const [windowActor, clone] of Array.from(this._windowClones.entries())) {
-                if (!active.has(windowActor)) {
-                    try {
-                        clone.destroy();
-                    }
-                    catch (e) { }
-                    this._windowClones.delete(windowActor);
-                    zOrderDirty = true;
-                }
-            }
-            // Clone order is paint order; reindex only when the set or the stack moved.
-            const children = container.get_children();
-            let orderChanged = zOrderDirty;
-            if (!orderChanged) {
-                let i = 0;
-                for (const windowActor of active) {
-                    if (children[i] !== this._windowClones.get(windowActor)) {
-                        orderChanged = true;
-                        break;
-                    }
-                    i++;
-                }
-                if (!orderChanged && i !== children.length)
-                    orderChanged = true;
-            }
-            if (orderChanged) {
-                let index = 0;
-                for (const windowActor of active) {
-                    const clone = this._windowClones.get(windowActor);
-                    if (!clone)
-                        continue;
-                    try {
-                        container.set_child_at_index(clone, index);
-                    }
-                    catch (e) { }
-                    index++;
-                }
-            }
-        }
-        catch (e) { }
+        this._glass.syncSources();
+    }
+
+    _startGlassSync() {
+        if (this._destroyed || this._glassSyncId !== 0)
+            return;
+        startSyncLoop(this._glassSyncSlot, this._glassFirstSlot, {
+            alive: () => !this._destroyed && this._presented,
+            errorTag: 'SubmenuPanel',
+            step: () => this._syncGlass(),
+        });
+    }
+
+    _stopGlassSync() {
+        stopStageLoop(this._glassSyncSlot, this._glassFirstSlot);
     }
 
     _onSettled(opening) {
@@ -495,9 +360,11 @@ export class SubmenuPanel {
         }
         this._presented = true;
         this.measure();
-        // Build the window clones before the first drawn frame, while the panel is
-        // still transparent: the clone cost lands on a frame nobody sees.
-        this._syncBackdrop(true);
+        // The glass rect is final before the first drawn frame, while the panel is
+        // still transparent.
+        this._applyGeometry();
+        this._syncGlass();
+        this._startGlassSync();
         this._anim.prepare();
         this._anim.start(true);
         try {
@@ -556,6 +423,7 @@ export class SubmenuPanel {
     /** Removes the panel from the stage but keeps every actor alive. */
     _hideStage() {
         this._presented = false;
+        this._stopGlassSync();
         try {
             this._anim.stop();
         }
@@ -576,15 +444,19 @@ export class SubmenuPanel {
             return;
         this._destroyed = true;
         this._generation++;
+        this._stopGlassSync();
         try {
             this._anim.stop();
         }
         catch (e) { }
-        try {
-            this._effect.cleanup();
+        for (const id of this._glassSettingsIds)
+            this._manager._settings.disconnect(id);
+        this._glassSettingsIds = [];
+        if (this._paletteSignalId) {
+            St.Settings.get().disconnect(this._paletteSignalId);
+            this._paletteSignalId = 0;
         }
-        catch (e) { }
-        this._windowClones.clear();
+        this._glass.cleanup();
         try {
             this._scrim.destroy();
         }

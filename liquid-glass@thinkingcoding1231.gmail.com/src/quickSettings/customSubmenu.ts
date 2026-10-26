@@ -3,7 +3,6 @@ import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
-import Gio from 'gi://Gio';
 import { Spinner } from 'resource:///org/gnome/shell/ui/animation.js';
 
 import { SubmenuPanel } from './submenuPanel.js';
@@ -859,16 +858,6 @@ export class CustomSubmenuRenderer {
         items.push(...Array.from(wifiToggle._items.values?.() || []));
     } catch (e) {}
     return items;
-  }
-
-  _getPaletteClass() {
-    try {
-      let interfaceSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
-      let colorScheme = interfaceSettings.get_string('color-scheme');
-      if (colorScheme === 'prefer-light')
-        return 'liquid-glass-control-palette-light';
-    } catch (e) {}
-    return 'liquid-glass-control-palette-dark';
   }
 
   _createSwitch(active: boolean) {

@@ -6,28 +6,19 @@ import Meta from 'gi://Meta';
 import Pango from 'gi://Pango';
 import { markOpenTrigger, timed } from '../diagnostics/openLag.js';
 import { StageContrastSampler, AdaptiveContrastConfig } from './qsContrastSampler.js';
-import { suppressGnomePopupAnimation, hasStyleClass, hexToRgb } from './qsUtils.js';
+import { suppressGnomePopupAnimation, hasStyleClass } from './qsUtils.js';
 import { CustomSubmenuRenderer } from './customSubmenu.js';
 import { CustomQuickSettingsRenderer } from './customQuickSettings.js';
 import { QuickSettingsStampAnimation } from './quickSettingsAnimation.js';
 import { isActorValid } from '../actors/lifecycle.js';
-import { BackdropGlass } from '../rendering/backdropGlass.js';
-import { hexToColorArray, adaptiveColorTweener } from '../animation/colors.js';
+import { QS_DEFAULT_CORNER_RADIUS, QS_GLASS_PADDING, createQuickSettingsGlass, quickSettingsShadowRoom, } from './glassAppearance.js';
+import { hexToColorArray, hexToRgb, adaptiveColorTweener } from '../animation/colors.js';
 // The card-backing sync's timer period: short while something is changing,
 // longer once the menu has been idle (the syncs themselves stay 750ms apart
 // then; the timer only has to notice an animation ending or the menu closing).
 const CARD_BACKING_ACTIVE_MS = 16;
 const CARD_BACKING_IDLE_WAKE_MS = 100;
-// Transparent padding outside the glass area.
-// This prevents the shader distortion or rounded corners from being clipped by the actor bounds.
-const SHADER_PADDING = 20;
 const ENABLE_QS_CARD_SHADER = true;
-const QS_CARD_SHADER_PADDING = 20;
-// Fallback corner radius for the whole-grid glass when the setting is unset.
-const QS_DEFAULT_CORNER_RADIUS = 18;
-// Slack added to a shadow's reach so the fade never lands exactly on the actor
-// edge, matching the application glass margin.
-const SHADOW_MARGIN_HEADROOM = 20;
 // Drives the verbose [LG-*] animation tracing. Off by default: the template
 // literals below were built on every open/close stop regardless of whether
 // anything consumes the output.
@@ -65,7 +56,7 @@ export class QuickSettingsManager {
     // The one glass every card is drawn into. Same architecture as the calendar
     // menu and the top bar's island style: a BackdropGlass that copies its own
     // backdrop, blurs it once and composites all the card regions in a single
-    // pass. Replaces the per-card Shell.BlurEffect + LiquidEffect stack.
+    // pass.
     _glass = null;
     _cardBackingSyncId;
     _cardBackingLastSignature;
@@ -503,19 +494,13 @@ export class QuickSettingsManager {
         let parent = this.menu?.actor?.get_parent?.() || Main.layoutManager.uiGroup;
         if (!parent)
             return null;
-        glass = new BackdropGlass({
-            extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'quick-settings',
+        glass = createQuickSettingsGlass(this, {
+            owner: 'quick-settings',
             outline: 'quick-settings',
+            multiRegion: true,
+            cornerRadius: this._cornerRadius || QS_DEFAULT_CORNER_RADIUS,
         });
-        glass.setPadding(SHADER_PADDING);
-        glass.setIsDock(false);
-        glass.setMultiRegionMode(true);
-        glass.setTintColor(...hexToColorArray(this._settings.get_string('quick-settings-tint-color')));
-        glass.setTintStrength(this._settings.get_double('quick-settings-tint-strength'));
-        glass.setBlurRadius(this._settings.get_int('quick-settings-blur-radius'));
-        glass.setCornerRadius(this._cornerRadius || QS_DEFAULT_CORNER_RADIUS);
-        this._shadowRoom = this._computeShadowRoom();
-        glass.setShadowMaxRadius(this._shadowRoom);
+        this._shadowRoom = quickSettingsShadowRoom(this._settings);
         glass.set_size(2, 2);
         glass.opacity = 0;
         glass.hide();
@@ -536,11 +521,7 @@ export class QuickSettingsManager {
     // shadow is off. The shader caps the shadow at `shadow_max_radius`, so the
     // actor only has to offer this much room.
     _computeShadowRoom() {
-        const radius = this._settings.get_double('shadow-radius');
-        const intensity = this._settings.get_double('shadow-intensity');
-        if (!(radius > 0) || !(intensity > 0))
-            return 0;
-        return Math.ceil(radius) + SHADOW_MARGIN_HEADROOM;
+        return quickSettingsShadowRoom(this._settings);
     }
 
     // Pushes a changed shadow setting into the glass. The margin is part of the
@@ -755,7 +736,7 @@ export class QuickSettingsManager {
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         let opacity = 255;
         let visibleCount = 0;
-        const pad = QS_CARD_SHADER_PADDING;
+        const pad = QS_GLASS_PADDING;
         const pushRegion = (x, y, w, h, stCard) => {
             const isCircle = !!stCard.has_style_class_name?.('liquid-glass-card-circle');
             const isSquircle = !!stCard.has_style_class_name?.('liquid-glass-card-squircle');
@@ -2313,8 +2294,8 @@ export class QuickSettingsManager {
         return;
     }
 
-    // The menu-level glass actor and its LiquidEffect were removed, so there is
-    // no menu-sized shader left to resolve. Kept as a call-site stable no-op.
+    // The glass owns its resolution per card region, so there is nothing
+    // menu-sized to resolve. Kept as a call-site stable no-op.
     _updateResolution() {
     }
 
@@ -3012,8 +2993,9 @@ export class QuickSettingsManager {
 
     // ---- Floating submenu ------------------------------------------------
     //
-    // The submenu owns its own glass stack (see submenuPanel.ts) and no longer
-    // borrows Quick Settings' frosted sheet.
+    // The submenu has its own BackdropGlass (see submenuPanel.ts). It is separate
+    // from the grid's glass so it can sit above Quick Settings while the two
+    // surfaces crossfade.
     showSubmenuInFloatingWindow(stCard, kind) {
         if (!this._submenuRenderer) {
             this._submenuRenderer = new CustomSubmenuRenderer(this);

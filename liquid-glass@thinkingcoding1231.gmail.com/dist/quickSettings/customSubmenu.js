@@ -2,7 +2,6 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
-import Gio from 'gi://Gio';
 import { Spinner } from 'resource:///org/gnome/shell/ui/animation.js';
 import { SubmenuPanel } from './submenuPanel.js';
 import { isActorValid } from '../actors/lifecycle.js';
@@ -888,17 +887,6 @@ export class CustomSubmenuRenderer {
         }
         catch (e) { }
         return items;
-    }
-
-    _getPaletteClass() {
-        try {
-            let interfaceSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
-            let colorScheme = interfaceSettings.get_string('color-scheme');
-            if (colorScheme === 'prefer-light')
-                return 'liquid-glass-control-palette-light';
-        }
-        catch (e) { }
-        return 'liquid-glass-control-palette-dark';
     }
 
     _createSwitch(active) {
