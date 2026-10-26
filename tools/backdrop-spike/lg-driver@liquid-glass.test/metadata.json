@@ -1,0 +1,13 @@
+{
+  "name": "Liquid Glass test driver",
+  "description": "Drives Liquid Glass through fixed scenarios in the headless shell started by run-glass.sh and records screenshots and counters.",
+  "uuid": "lg-driver@liquid-glass.test",
+  "shell-version": [
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "51"
+  ]
+}

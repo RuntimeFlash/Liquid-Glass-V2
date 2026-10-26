@@ -1,0 +1,8 @@
+{
+  "name": "Liquid Glass benchmark",
+  "description": "Puts the desktop through fixed situations and labels Liquid Glass's monitor lines with them. Development tool; not for distribution.",
+  "uuid": "lg-bench@liquid-glass.test",
+  "shell-version": [
+    "50"
+  ]
+}

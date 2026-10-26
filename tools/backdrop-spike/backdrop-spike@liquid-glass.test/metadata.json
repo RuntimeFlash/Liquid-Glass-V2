@@ -1,0 +1,8 @@
+{
+  "name": "Liquid Glass backdrop spike",
+  "description": "Phase 0 checks for reading the backdrop out of the stage framebuffer. Runs only in the headless shell started by run-nested.sh.",
+  "uuid": "backdrop-spike@liquid-glass.test",
+  "shell-version": [
+    "50"
+  ]
+}

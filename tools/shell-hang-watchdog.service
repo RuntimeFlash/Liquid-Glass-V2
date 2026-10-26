@@ -1,0 +1,13 @@
+[Unit]
+Description=Watch gnome-shell for D-Bus unresponsiveness and capture thread state on hang
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/Projects/GitHub/liquid-glass/tools/shell-hang-watchdog.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
